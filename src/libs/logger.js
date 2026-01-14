@@ -50,4 +50,3 @@ export const logHttpRequest = (req, res, responseTime) => {
 
     });
 };
-
