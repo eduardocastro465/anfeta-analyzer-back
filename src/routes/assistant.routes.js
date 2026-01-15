@@ -1,8 +1,9 @@
 import { Router } from "express";
-import { assistantController } from "../controllers/assistant.controller.js";
+import { devuelveActividades,devuelveActReviciones } from "../controllers/assistant.controller.js";
 
 const router = Router();
 
-router.post("/", assistantController);
+router.post("/act-col", devuelveActividades);
+router.post("/act-revisiones-col",devuelveActReviciones );
 
 export default router;

@@ -19,7 +19,8 @@ connectDB();
 
 // CORS
 app.use(cors({
-  origin: CORS_ORIGINS,
+  // origin: CORS_ORIGINS,
+  origin: "*",
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE"],
 }));
@@ -62,6 +63,7 @@ const modoProduction = process.env.NODE_ENV === "production";
 app.listen(PORT, () => {
   textoColorido(
     [`🌎 Servidor corriendo en el puerto: ${PORT} 🖥`],
+    // [` Servidor corriendo en el puerto: ${PORT} `],
     ["rgb(33, 97, 235)", "rgb(46, 15, 183)"],
     modoProduction
   );

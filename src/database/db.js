@@ -17,6 +17,10 @@ export const connectDB = async () => {
     const fechaFormateada = formatearFecha(fechaActual);
 
     textoColorido(
+      // [
+      //   `       Base de datos conectada `,
+      //   ` Hora de conexión: ${fechaFormateada} `,
+      // ],
       [
         `      🚀 Base de datos conectada 💻`,
         ` Hora de conexión: ${fechaFormateada} `,
@@ -27,7 +31,8 @@ export const connectDB = async () => {
 
   } catch (error) {
     textoColorido(
-      ["🔥 ERROR: No se pudo conectar a la base de datos", "Detalles: Conexión rechazada 🛸"],
+      // ["🔥 ERROR: No se pudo conectar a la base de datos", "Detalles: Conexión rechazada 🛸"],
+      [" ERROR: No se pudo conectar a la base de datos", "Detalles: Conexión rechazada "],
       ["rgb(255, 0, 0)", "rgb(255, 69, 0)"],
       modoProduction
     );

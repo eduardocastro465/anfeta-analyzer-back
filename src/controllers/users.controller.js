@@ -6,7 +6,6 @@ export const getAllUsers = async () => {
   try {
     const response = await axios.get(`${urlApi}/users/search`);
 
-    // 🔥 AQUÍ FILTRAS
     const usersClean = response.data.items.map(user => ({
       _id: user._id,
       email: user.email,
