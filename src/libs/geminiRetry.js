@@ -13,3 +13,13 @@ export async function callGeminiWithRetry(fn, retries = 3, delay = 2000) {
     throw error;
   }
 }
+
+export function isGeminiQuotaError(error) {
+  return (
+    error?.error?.code === 429 ||
+    error?.status === "RESOURCE_EXHAUSTED" ||
+    error?.error?.status === "RESOURCE_EXHAUSTED" ||
+    error?.message?.includes("Quota exceeded") ||
+    error?.message?.includes("RESOURCE_EXHAUSTED")
+  );
+}

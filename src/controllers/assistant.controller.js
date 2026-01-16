@@ -2,13 +2,12 @@ import axios from 'axios';
 import { GoogleGenAI } from '@google/genai';
 import { GEMINI_API_KEY } from '../config.js';
 import { getAllUsers } from './users.controller.js';
-import { callGeminiWithRetry } from '../libs/geminiRetry.js'
+import { callGeminiWithRetry, isGeminiQuotaError } from '../libs/geminiRetry.js'
 import { sanitizeObject } from '../libs/sanitize.js'
 
-
-const ai = new GoogleGenAI({
-  apiKey: GEMINI_API_KEY,
-});
+// const ai = new GoogleGenAI({
+//   apiKey: GEMINI_API_KEY,
+// });
 
 const urlApi = 'https://wlserver-production.up.railway.app/api';
 
@@ -16,9 +15,11 @@ export async function devuelveActividades(req, res) {
   try {
     const { question, email } = sanitizeObject(req.body);
 
+    const INICIO_RANGO = horaAMinutos('09:30'); // 570
+    const FIN_RANGO = horaAMinutos('17:30');    // 1050
+
     const usersData = await getAllUsers();
 
-    // Buscar usuario por email
     const user = usersData.items.find(
       (u) => u.email.toLowerCase() === email.toLowerCase()
     );
@@ -28,48 +29,103 @@ export async function devuelveActividades(req, res) {
     }
 
     // Consultar actividades del día
-    const response = await axios.get(`${urlApi}/actividades/assignee/${user.email}/del-dia`);
+    const response = await axios.get(`${urlApi}/actividades/assignee/${email}/del-dia`);
 
-    const { data } = response.data.data;
+    const actividadesRaw = response.data.data;
 
-    const actividades = (data?.data || []).map((a) => ({
-      h: `${a.horaInicio}-${a.horaFin}`,
-      t: a.titulo.slice(0, 60),
-      s: a.status,
-    }));
+    console.log("Raw activities:", actividadesRaw);
 
-    // Preparamos el prompt para Gemini
-    const prompt = `Eres un asistente de productividad.
-      Usuario: ${user.firstName} ${user.lastName}
-      Pregunta: "${question}"
-      Agenda de hoy:${JSON.stringify(actividades)}
-      Responde de forma clara y directa.`.trim();
+    const actividades = Array.isArray(actividadesRaw)
+      ? actividadesRaw
+        .filter((a) => {
+          const inicio = horaAMinutos(a.horaInicio?.trim());
+          const fin = horaAMinutos(a.horaFin?.trim());
+
+          if (inicio === null || fin === null) return false;
+
+          // Descarta actividades que cruzan medianoche
+          if (fin <= inicio) return false;
+
+          // Solo incluye actividades que tengan al menos un minuto dentro del rango laboral
+          return fin > INICIO_RANGO && inicio < FIN_RANGO;
+        })
+        .map((a) => ({
+          id: a.id,
+          h: `${a.horaInicio}-${a.horaFin}`,
+          t: a.titulo ? a.titulo.slice(0, 60) : "Sin título",
+          s: a.status || "SIN ESTATUS",
+          p: Array.isArray(a.pendientes) ? a.pendientes.length : 0
+        }))
+      : [];
+
+
+    console.log("Filtered activities:", actividades);
+
+    //     const prompt = `
+    // Eres un asistente que ayuda a organizar las actividades del día.
+
+    // Usuario: ${user.firstName}
+    // Pregunta: "${question}"
+
+    // Agenda de hoy:
+    // ${actividades
+    //         .map(
+    //           a =>
+    //             `- ${a.h} | ${a.t} | ${a.s}${a.p > 0 ? ` | Pendientes: ${a.p}` : ""}`
+    //         )
+    //         .join("\n")}
+
+    // Responde de forma clara y directa.
+    // Si hay pendientes, menciónalos.
+    // Al final, haz una pregunta para ayudar a decidir qué actividad hacer primero.
+    // `.trim();
 
     // Enviamos el prompt a Gemini con reintentos
-    const geminiResponse = await callGeminiWithRetry(() =>
-      ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: prompt,
-      })
-    );
+    // const geminiResponse = await callGeminiWithRetry(() =>
+    //   ai.models.generateContent({
+    //     model: 'gemini-3-flash-preview',
+    //     contents: prompt,
+    //   })
+    // );
 
     // Respuesta final
     res.json({
-      answer: geminiResponse.text,
+      success: true,
+      data: actividades
+
+      // answer: geminiResponse.text,
     });
   } catch (error) {
-    console.error('Assistant error:', error.message);
-    res.status(500).json({ error: 'Error del asistente' });
+    console.error("Error en devuelveActividades:", error);
+
+    //Si se acabaron los tokens / cuota
+    // if (isGeminiQuotaError(error)) {
+    //   return res.status(429).json({
+    //     success: false,
+    //     reason: "QUOTA_EXCEEDED",
+    //     message: "El asistente está temporalmente saturado. Intenta nuevamente en unos minutos."
+    //   });
+    // }
+
+    return res.status(500).json({
+      success: false,
+      message: "Error interno del asistente"
+    });
   }
 }
 
 export async function devuelveActReviciones(req, res) {
   try {
-    const { colaborador } = sanitizeObject(req.body);
+    const { email, idsAct } = sanitizeObject(req.body);
 
-    console.log("Received parameters:", { colaborador });
 
-    // Obtenemos la fecha de hoy
+    if (!email || !Array.isArray(idsAct)) {
+      return res.status(400).json({
+        success: false,
+        message: "Parámetros inválidos (email o idsAct)"
+      });
+    }
+
     const today = new Date();
     const yyyy = today.getFullYear();
     const mm = String(today.getMonth() + 1).padStart(2, "0");
@@ -77,36 +133,87 @@ export async function devuelveActReviciones(req, res) {
     const formattedToday = `${yyyy}-${mm}-${dd}`;
 
     const response = await axios.get(
-      `${urlApi}/reportes/revisiones-por-fecha?date=${formattedToday}&colaborador=${colaborador}`,
+      `${urlApi}/reportes/revisiones-por-fecha?date=${formattedToday}&colaborador=${email}`
     );
 
-    //https://wlserver-production.up.railway.app/api/reportes/revisiones-por-fecha?date=2026-01-15&colaborador=eedua@practicante.com
-
-    if (!response.data.success) {
-      console.error("API responded with an error:", response.data.message);
+    if (!response.data?.success) {
       return res.status(500).json({
         success: false,
         message: "Error al obtener revisiones",
-        error: response.data.message
+        error: response.data?.message
       });
     }
+    const revisiones = response.data.data;
+
+    // filtramos
+    const actividadesRevi = new Map();
+
+    revisiones.colaboradores.forEach(colaborador => {
+      (colaborador.items?.actividades ?? []).forEach(actividad => {
+
+        // 1️⃣ filtro por idsAct
+        if (idsAct.length && !idsAct.includes(actividad.id)) return;
+
+        // 2️⃣ filtro por colaborador (email)
+        const pendientesFiltrados = (actividad.pendientes ?? [])
+          .filter(p =>
+            p.assignees?.some(a => a.name === email)
+          )
+          .map(p => ({
+            id: p.id,
+            nombre: p.nombre,
+            terminada: p.terminada,
+            confirmada: p.confirmada,
+            duracionMin: p.duracionMin,
+            fechaCreacion: p.fechaCreacion,
+            fechaFinTerminada: p.fechaFinTerminada
+          }));
+
+        if (!pendientesFiltrados.length) return;
+
+        // 3️⃣ segundo filtro: evitar actividades duplicadas
+        if (!actividadesRevi.has(actividad.id)) {
+          actividadesRevi.set(actividad.id, {
+            actividades: {
+              id: actividad.id,
+              titulo: actividad.titulo
+            },
+            pendientes: pendientesFiltrados,
+            assignees: pendientesFiltrados[0]?.assignees ?? [
+              { name: email }
+            ]
+          });
+        }
+      });
+    });
+
+    // resultado final sin duplicados
+    const resultado = Array.from(actividadesRevi.values());
 
     return res.status(200).json({
       success: true,
-      filtros: {
-        date: formattedToday,
-        colaborador: colaborador
-      },
-      data: response.data
+      data: resultado
     });
 
   } catch (error) {
-    console.error("Error fetching revisiones:", error);
+    // tokens agotados
+    if (isGeminiQuotaError(error)) {
+      return res.status(429).json({
+        success: false,
+        reason: "QUOTA_EXCEEDED",
+        message: "El asistente está temporalmente saturado. Intenta nuevamente en unos minutos."
+      });
+    }
 
     return res.status(500).json({
       success: false,
-      message: "Error al obtener revisiones",
-      error: error.message
+      message: "Error interno del asistente"
     });
   }
+}
+
+function horaAMinutos(hora) {
+  if (!hora) return null;
+  const [h, m] = hora.split(':').map(Number);
+  return h * 60 + m;
 }
