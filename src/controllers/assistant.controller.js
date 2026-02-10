@@ -10,6 +10,7 @@ import ActividadesSchema from "../models/actividades.model.js";
 import HistorialBot from "../models/historialBot.model.js";
 import { TOKEN_SECRET, API_URL_ANFETA } from '../config.js';
 import { obtenerSesionActivaDelDia } from '../libs/generarSessionIdDiario.js';
+import { guardarMensajeHistorial } from "../Helpers/historial.helper.js";
 
 export async function verificarAnalisisDelDia(req, res) {
   try {
@@ -104,7 +105,7 @@ export async function getActividadesConRevisiones(req, res) {
     const { token } = req.cookies;
     const decoded = jwt.verify(token, TOKEN_SECRET);
     const odooUserId = decoded.id;
-    const sessionId = await generarSessionIdDiario(odooUserId);
+    const sessionId = await obtenerSesionActivaDelDia(odooUserId);
 
     // 2️⃣ Obtener actividades del día específicas del usuario
     const actividadesUsuarioRes = await axios.get(`${API_URL_ANFETA}/actividades/assignee/${email}/del-dia`);
@@ -458,42 +459,47 @@ RESPONDE SOLO EL TÍTULO
       console.warn("No se pudo generar nombre de conversación con IA");
     }
 
-    await HistorialBot.findOneAndUpdate(
-      { userId: odooUserId, sessionId },
-      {
-        $setOnInsert: {
-          userId: odooUserId,
-          sessionId,
-          nombreConversacion: nombreConversacionIA
-        },
-        $set: {
-          tareasEstado: tareasEstadoArray,
-          ultimoAnalisis: analisisCompleto,
-          estadoConversacion: "mostrando_actividades"
-        },
-        $push: {
-          mensajes: {
-            $each: [
-              {
-                role: "usuario",
-                contenido: question,
-                timestamp: new Date(),
-                tipoMensaje: "texto",
-                analisis: null
-              },
-              {
-                role: "bot",
-                contenido: aiResult.text,
-                timestamp: new Date(),
-                tipoMensaje: "analisis_inicial",
-                analisis: analisisCompleto
-              }
-            ]
-          }
-        }
-      },
-      { upsert: true, new: true }
+    const sesionExistente = await HistorialBot.findOne({
+      userId: odooUserId,
+      sessionId: sessionId
+    });
+
+    const yaExisteAnalisisInicial = sesionExistente?.mensajes?.some(
+      msg => msg.tipoMensaje === "analisis_inicial"
     );
+
+    // Si no existe un analisis inicial, procede
+    if (!yaExisteAnalisisInicial) {
+
+      await HistorialBot.findOneAndUpdate(
+        {
+          userId: odooUserId,
+          sessionId: sessionId
+        },
+        {
+          $set: {
+            nombreConversacion: nombreConversacionIA,
+            tareasEstado: tareasEstadoArray,
+            ultimoAnalisis: analisisCompleto,
+            estadoConversacion: "mostrando_actividades"
+          },
+          $push: {
+            mensajes: {
+              role: "bot",
+              contenido: aiResult.text,
+              timestamp: new Date(),
+              tipoMensaje: "analisis_inicial",
+              analisis: analisisCompleto
+            }
+          }
+        },
+        {
+          upsert: true,  // ✅ Crear si no existe (aunque ya debería existir)
+          new: true      // ✅ Devolver el documento actualizado
+        }
+      );
+    }
+
 
     // await ActividadesSchema.findOneAndUpdate(
     //   { odooUserId: odooUserId },
@@ -2062,17 +2068,7 @@ export async function consultarIA(req, res) {
     });
 
   } catch (error) {
-
-
-    // Log más detallado
-    if (error.response) {
-
-    } else if (error.request) {
-
-    } else {
-
-    }
-
+    console.log(error);
     return res.status(500).json({
       success: false,
       error: "Error al conectar con el servicio de IA. Por favor, intenta nuevamente."
@@ -2244,15 +2240,7 @@ export async function consultarIAProyecto(req, res) {
 
   } catch (error) {
 
-
-    // Log más detallado
-    if (error.response) {
-
-    } else if (error.request) {
-
-    } else {
-
-    }
+    console.log(error);
 
     return res.status(500).json({
       success: false,
