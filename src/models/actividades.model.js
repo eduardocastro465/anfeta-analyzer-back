@@ -51,10 +51,10 @@ const pendienteSchema = new mongoose.Schema(
     fechaCreacion: Date,
     fechaFinTerminada: Date,
     motivoNoCompletado: String,
-    
+
     // 🔥 NUEVOS CAMPOS PARA VOZ
     prioridad: { type: String, enum: ['ALTA', 'MEDIA', 'BAJA', 'URGENTE'], default: 'MEDIA' },
-    
+
     // 🔥 CAMPOS DE AUDITORÍA Y SEGUIMIENTO
     ultimaActualizacion: { type: Date, default: Date.now },
     actualizadoPor: String, // Email del usuario que actualizó
@@ -62,18 +62,18 @@ const pendienteSchema = new mongoose.Schema(
     fechaRevisionVoz: Date,
     vecesExplicado: { type: Number, default: 0 },
     ultimaExplicacionFecha: Date,
-    
+
     // 🔥 EXPLICACIÓN DE VOZ ACTUAL
     explicacionVoz: explicacionVozSchema,
-    
+
     // 🔥 HISTORIAL COMPLETO DE EXPLICACIONES
     historialExplicaciones: [historialExplicacionSchema],
-    
+
     // 🔥 ESTADÍSTICAS DE USO
     tiempoTotalExplicacion: { type: Number, default: 0 }, // en segundos
     intentosValidacion: { type: Number, default: 0 },
     intentosExitosos: { type: Number, default: 0 },
-    
+
     // 🔥 FLAGS ADICIONALES
     requiereAtencion: { type: Boolean, default: false },
     complejidad: { type: String, enum: ['BAJA', 'MEDIA', 'ALTA'], default: 'MEDIA' },
@@ -94,23 +94,23 @@ const actividadSchema = new mongoose.Schema(
     fecha: String,
     pendientes: [pendienteSchema],
     ultimaActualizacion: { type: Date, default: Date.now },
-    
+
     // 🔥 NUEVOS CAMPOS PARA VOZ
     actualizadoPor: String, // Email del usuario que actualizó
     fechaRevisionVoz: Date,
     totalExplicacionesVoz: { type: Number, default: 0 },
     completadaPorVoz: { type: Boolean, default: false },
-    
+
     // 🔥 METADATOS ADICIONALES
     contexto: String, // Contexto adicional de la actividad
     ubicacion: String, // Ubicación o entorno
     herramientas: [String], // Herramientas utilizadas
-    
+
     // 🔥 ESTADÍSTICAS
     tiempoTotalEstimado: Number, // en minutos
     tiempoRealUtilizado: Number, // en minutos
     eficiencia: Number, // porcentaje
-    
+
     // 🔥 FLAGS
     requiereFeedback: { type: Boolean, default: false },
     prioridadGlobal: { type: String, enum: ['ALTA', 'MEDIA', 'BAJA'], default: 'MEDIA' }
@@ -121,20 +121,20 @@ const actividadSchema = new mongoose.Schema(
 // 🔥 ESQUEMA PRINCIPAL (ACTUALIZADO)
 const actividadesSchema = new mongoose.Schema(
   {
-    odooUserId: { type: String, required: true, index: true },
+    odooUserId: { type: String, required: true },
     emailUsuario: String, // Email principal del usuario
     nombreUsuario: String, // Nombre completo
-    
+
     actividades: [actividadSchema],
     ultimaSincronizacion: { type: Date, default: Date.now },
-    
+
     // 🔥 METADATOS GLOBALES DE VOZ
     fechaPrimeraExplicacion: Date,
     fechaUltimaExplicacion: Date,
     totalExplicacionesVoz: { type: Number, default: 0 },
     totalExplicacionesValidadas: { type: Number, default: 0 },
     totalExplicacionesRechazadas: { type: Number, default: 0 },
-    
+
     // 🔥 SESIONES DE VOZ
     sesionesVoz: [{
       sessionId: String,
@@ -146,7 +146,7 @@ const actividadesSchema = new mongoose.Schema(
       dispositivo: String,
       estado: { type: String, enum: ['COMPLETADA', 'INTERRUMPIDA', 'ERROR'], default: 'COMPLETADA' }
     }],
-    
+
     // 🔥 ESTADÍSTICAS GLOBALES
     estadisticas: {
       totalActividades: { type: Number, default: 0 },
@@ -159,7 +159,7 @@ const actividadesSchema = new mongoose.Schema(
       ultimaSessionId: String,
       fechaUltimaEstadistica: Date
     },
-    
+
     // 🔥 PREFERENCIAS DE USUARIO
     preferencias: {
       velocidadVoz: { type: Number, default: 1.0, min: 0.5, max: 2.0 },
@@ -170,7 +170,7 @@ const actividadesSchema = new mongoose.Schema(
       },
       tema: { type: String, enum: ['CLARO', 'OSCURO', 'AUTO'], default: 'AUTO' }
     },
-    
+
     // 🔥 AUDITORÍA
     metadata: {
       versionApp: String,
@@ -180,7 +180,7 @@ const actividadesSchema = new mongoose.Schema(
       fechaRegistro: { type: Date, default: Date.now }
     }
   },
-  { 
+  {
     timestamps: true, // Crea createdAt y updatedAt automáticamente
     collection: 'actividades_con_explicaciones' // Nombre personalizado de colección
   }
@@ -198,20 +198,20 @@ actividadesSchema.index({ fechaUltimaExplicacion: -1 });
 actividadesSchema.index({ "sesionesVoz.sessionId": 1 });
 
 // 🔥 MIDDLEWARE PARA ACTUALIZAR ESTADÍSTICAS
-actividadesSchema.pre('save', function(next) {
+actividadesSchema.pre('save', function (next) {
   const doc = this;
-  
+
   // Actualizar estadísticas globales
   if (doc.actividades && doc.actividades.length > 0) {
     const totalActividades = doc.actividades.length;
     let totalPendientes = 0;
     let pendientesConExplicacion = 0;
     let pendientesCompletadosVoz = 0;
-    
+
     doc.actividades.forEach(actividad => {
       if (actividad.pendientes) {
         totalPendientes += actividad.pendientes.length;
-        
+
         actividad.pendientes.forEach(pendiente => {
           if (pendiente.explicacionVoz && pendiente.explicacionVoz.texto) {
             pendientesConExplicacion++;
@@ -222,32 +222,32 @@ actividadesSchema.pre('save', function(next) {
         });
       }
     });
-    
+
     doc.estadisticas.totalActividades = totalActividades;
     doc.estadisticas.totalPendientes = totalPendientes;
     doc.estadisticas.pendientesConExplicacion = pendientesConExplicacion;
     doc.estadisticas.pendientesCompletadosVoz = pendientesCompletadosVoz;
     doc.estadisticas.fechaUltimaEstadistica = new Date();
-    
+
     // Calcular eficiencia global
     if (totalPendientes > 0) {
       doc.estadisticas.eficienciaGlobal = (pendientesConExplicacion / totalPendientes) * 100;
     }
   }
-  
+
   next();
 });
 
 // 🔥 MÉTODOS DE INSTANCIA ÚTILES
-actividadesSchema.methods.agregarSesionVoz = function(sesionData) {
+actividadesSchema.methods.agregarSesionVoz = function (sesionData) {
   this.sesionesVoz.push(sesionData);
   this.fechaUltimaExplicacion = new Date();
   return this.save();
 };
 
-actividadesSchema.methods.obtenerExplicacionesPorEmail = function(email) {
+actividadesSchema.methods.obtenerExplicacionesPorEmail = function (email) {
   const explicaciones = [];
-  
+
   this.actividades.forEach(actividad => {
     actividad.pendientes.forEach(pendiente => {
       if (pendiente.explicacionVoz && pendiente.explicacionVoz.emailUsuario === email) {
@@ -261,16 +261,16 @@ actividadesSchema.methods.obtenerExplicacionesPorEmail = function(email) {
       }
     });
   });
-  
+
   return explicaciones;
 };
 
-actividadesSchema.methods.actualizarEstadisticasUsuario = function() {
+actividadesSchema.methods.actualizarEstadisticasUsuario = function () {
   const email = this.emailUsuario;
   let totalExplicaciones = 0;
   let totalValidadas = 0;
   let totalRechazadas = 0;
-  
+
   this.actividades.forEach(actividad => {
     actividad.pendientes.forEach(pendiente => {
       if (pendiente.explicacionVoz && pendiente.explicacionVoz.emailUsuario === email) {
@@ -283,22 +283,22 @@ actividadesSchema.methods.actualizarEstadisticasUsuario = function() {
       }
     });
   });
-  
+
   this.totalExplicacionesVoz = totalExplicaciones;
   this.totalExplicacionesValidadas = totalValidadas;
   this.totalExplicacionesRechazadas = totalRechazadas;
-  
+
   return this.save();
 };
 
 // 🔥 MÉTODO PARA OBTENER REPORTE COMPLETO
-actividadesSchema.statics.generarReporteUsuario = async function(odooUserId, emailUsuario) {
+actividadesSchema.statics.generarReporteUsuario = async function (odooUserId, emailUsuario) {
   const usuario = await this.findOne({ odooUserId });
-  
+
   if (!usuario) {
     throw new Error('Usuario no encontrado');
   }
-  
+
   const reporte = {
     usuario: {
       odooUserId: usuario.odooUserId,
@@ -310,18 +310,18 @@ actividadesSchema.statics.generarReporteUsuario = async function(odooUserId, ema
     sesionesVoz: usuario.sesionesVoz.length,
     actividades: []
   };
-  
+
   usuario.actividades.forEach(actividad => {
     const actividadReporte = {
       titulo: actividad.titulo,
       fecha: actividad.fecha,
       totalPendientes: actividad.pendientes.length,
-      pendientesConExplicacion: actividad.pendientes.filter(p => 
+      pendientesConExplicacion: actividad.pendientes.filter(p =>
         p.explicacionVoz && p.explicacionVoz.emailUsuario === emailUsuario
       ).length,
       pendientes: []
     };
-    
+
     actividad.pendientes.forEach(pendiente => {
       if (pendiente.explicacionVoz && pendiente.explicacionVoz.emailUsuario === emailUsuario) {
         actividadReporte.pendientes.push({
@@ -333,12 +333,12 @@ actividadesSchema.statics.generarReporteUsuario = async function(odooUserId, ema
         });
       }
     });
-    
+
     if (actividadReporte.pendientes.length > 0) {
       reporte.actividades.push(actividadReporte);
     }
   });
-  
+
   return reporte;
 };
 

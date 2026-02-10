@@ -8,18 +8,20 @@ import { textoColorido } from "./src/utils/colorText.js";
 import { CORS_ORIGINS, API_VERSION, PORT } from "./src/config.js";
 import { connectDB } from "./src/database/db.js";
 
+// Constantes
+const modoProduction = process.env.NODE_ENV === "production";
+
+// DB
+await connectDB();
+const app = express();
+
+
+
 // Rutas
 import adminRouter from "./src/routes/admin.routes.js";
 import assistantRoutes from "./src/routes/assistant.routes.js";
 import authRoutes from "./src/routes/auth.routes.js";
 import reportesRoutes from "./src/routes/reportes.routes.js";
-
-const modoProduction = process.env.NODE_ENV === "production";
-
-const app = express();
-
-// DB
-connectDB();
 
 // CORS (IMPORTANTE)
 app.use(

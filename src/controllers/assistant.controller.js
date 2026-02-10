@@ -9,40 +9,82 @@ import memoriaService from '../Helpers/MemoriaService.helpers.js';
 import ActividadesSchema from "../models/actividades.model.js";
 import HistorialBot from "../models/historialBot.model.js";
 import { TOKEN_SECRET, API_URL_ANFETA } from '../config.js';
+import { obtenerSesionActivaDelDia } from '../libs/generarSessionIdDiario.js';
 
+export async function verificarAnalisisDelDia(req, res) {
+  try {
+    const { token } = req.cookies;
+    const decoded = jwt.verify(token, TOKEN_SECRET);
+    const { id: userId } = decoded;
 
-// import axios from 'axios';
-// import jwt from 'jsonwebtoken';
-// // Importa tus modelos (HistorialBot, ActividadesSchema, etc.)
-
-// // --- FUNCIONES AUXILIARES ---
-
-// Limpia los correos para mostrar nombres legibles (ej: "kkarl@pprin.com" -> "Kkarl")
-function limpiarNombreColaborador(correo) {
-    if (typeof correo !== 'string') return "Usuario";
-    const nombreBase = correo.split('@')[0].replace(/[^a-zA-Z]/g, '');
-    return nombreBase.charAt(0).toUpperCase() + nombreBase.slice(1);
-}
-
-// Extrae colaboradores únicos combinando los assignees de la actividad general
-function extraerColaboradoresUnicos(actividadGeneral) {
-    const colaboradoresSet = new Set();
-    if (actividadGeneral && actividadGeneral.assignees && Array.isArray(actividadGeneral.assignees)) {
-        actividadGeneral.assignees.forEach(correo => {
-            colaboradoresSet.add(limpiarNombreColaborador(correo));
-        });
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        error: "Usuario no autenticado"
+      });
     }
-    return Array.from(colaboradoresSet);
+
+    // Obtener sesión activa del día
+    const sessionId = await obtenerSesionActivaDelDia(userId);
+
+    // Buscar si ya existe un análisis para esta sesión
+    const historialExistente = await HistorialBot.findOne({
+      userId: userId,
+      sessionId: sessionId,
+      'ultimoAnalisis': { $exists: true }
+    }).lean();
+
+    if (historialExistente && historialExistente.ultimoAnalisis) {
+
+      // Ya existe un análisis del día
+      return res.json({
+        success: true,
+        tieneAnalisis: true,
+        sessionId: sessionId,
+        analisis: historialExistente.ultimoAnalisis,
+        mensajes: historialExistente.mensajes || []
+      });
+    } else {
+
+
+      // No existe análisis del día
+      return res.json({
+        success: true,
+        tieneAnalisis: false,
+        sessionId: sessionId
+      });
+    }
+
+  } catch (error) {
+
+    return res.status(500).json({
+      success: false,
+      error: "Error al verificar análisis del día"
+    });
+  }
 }
 
-// Formatea la hora desde UTC a horario local
+function limpiarNombreColaborador(correo) {
+  if (typeof correo !== 'string') return "Usuario";
+  const nombreBase = correo.split('@')[0].replace(/[^a-zA-Z]/g, '');
+  return nombreBase.charAt(0).toUpperCase() + nombreBase.slice(1);
+}
+
+function extraerColaboradoresUnicos(actividadGeneral) {
+  const colaboradoresSet = new Set();
+  if (actividadGeneral && actividadGeneral.assignees && Array.isArray(actividadGeneral.assignees)) {
+    actividadGeneral.assignees.forEach(correo => {
+      colaboradoresSet.add(limpiarNombreColaborador(correo));
+    });
+  }
+  return Array.from(colaboradoresSet);
+}
+
 function formatearHoraUTC(utcTimeString) {
-    if (!utcTimeString) return "00:00";
-    const date = new Date(utcTimeString);
-    return date.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' });
+  if (!utcTimeString) return "00:00";
+  const date = new Date(utcTimeString);
+  return date.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' });
 }
-
-// --- CONTROLADOR PRINCIPAL ---
 
 export async function getActividadesConRevisiones(req, res) {
   try {
@@ -52,9 +94,8 @@ export async function getActividadesConRevisiones(req, res) {
       return res.status(400).json({ success: false, message: "El email es requerido" });
     }
 
-    // 1️⃣ OBTENER TODAS LAS ACTIVIDADES (Endpoint global para extraer colaboradores)
     const responseGlobal = await axios.get(`https://wlserver-production-6735.up.railway.app/api/actividades/`);
-    const todasLasActividadesDB = responseGlobal.data.data; 
+    const todasLasActividadesDB = responseGlobal.data.data;
 
     const usersData = await getAllUsers();
     const user = usersData.items.find((u) => u.email.toLowerCase() === email.toLowerCase());
@@ -63,7 +104,7 @@ export async function getActividadesConRevisiones(req, res) {
     const { token } = req.cookies;
     const decoded = jwt.verify(token, TOKEN_SECRET);
     const odooUserId = decoded.id;
-    const sessionId = generarSessionIdDiario(odooUserId);
+    const sessionId = await generarSessionIdDiario(odooUserId);
 
     // 2️⃣ Obtener actividades del día específicas del usuario
     const actividadesUsuarioRes = await axios.get(`${API_URL_ANFETA}/actividades/assignee/${email}/del-dia`);
@@ -88,8 +129,8 @@ export async function getActividadesConRevisiones(req, res) {
         params: { date: today, colaborador: email }
       });
       if (revisionesRes.data?.success) todasRevisiones = revisionesRes.data.data;
-    } catch (e) { 
-      console.warn("Error obteniendo revisiones:", e.message); 
+    } catch (e) {
+      console.warn("Error obteniendo revisiones:", e.message);
     }
 
     // 4️⃣ FILTRADO Y CRUCE DE DATOS
@@ -113,7 +154,7 @@ export async function getActividadesConRevisiones(req, res) {
             // Buscar en la data global para obtener colaboradores
             const actividadGlobal = todasLasActividadesDB.find(a => a.id === actividadRev.id);
             const actividadOriginal = actividadesFiltradas.find(a => a.id === actividadRev.id);
-            
+
             if (!actividadGlobal) return;
 
             // Extraer colaboradores del endpoint global
@@ -539,9 +580,6 @@ RESPONDE SOLO EL TÍTULO
   }
 }
 
-
-
-// NUEVA FUNCIÓN PARA TAREAS TERMINADAS
 export async function getTareasTerminadasConRevisiones(req, res) {
   try {
     const { email, question = "¿Qué tareas ya terminé hoy? ¿Cuáles están confirmadas?", showAll = false } = sanitizeObject(req.body);
@@ -566,7 +604,7 @@ export async function getTareasTerminadasConRevisiones(req, res) {
     const decoded = jwt.verify(token, TOKEN_SECRET);
     const odooUserId = decoded.id;
 
-    const sessionId = generarSessionIdDiario(odooUserId);
+    const sessionId = await generarSessionIdDiario(odooUserId);
 
     // 1️ Obtener actividades del día para el usuario
     const actividadesResponse = await axios.get(
@@ -939,9 +977,6 @@ export async function obtenerActividadesConTiempoHoy(req, res) {
   }
 }
 
-
-// 
-// nueva funcio
 export const obtenerExplicacionesUsuario = async (req, res) => {
   try {
     const { odooUserId } = req.params; // O desde el token
@@ -1126,6 +1161,7 @@ RESPONDE ÚNICAMENTE EN JSON CON ESTE FORMATO EXACTO:
     });
   }
 }
+
 export async function validarYGuardarExplicacion(req, res) {
   try {
     const {
@@ -1421,8 +1457,6 @@ Responde ÚNICAMENTE en JSON:
   }
 }
 
-
-
 export async function guardarExplicaciones(req, res) {
   try {
     const { explanations, sessionId } = sanitizeObject(req.body);
@@ -1552,7 +1586,6 @@ export async function guardarExplicaciones(req, res) {
     });
   }
 }
-
 
 export async function confirmarEstadoPendientes(req, res) {
   try {
@@ -1808,7 +1841,6 @@ export async function obtenerHistorialSidebar(req, res) {
   }
 }
 
-
 export async function obtenerTodasExplicacionesAdmin(req, res) {
   try {
     // const { token } = req.cookies;
@@ -1895,7 +1927,7 @@ export async function obtenerTodasExplicacionesAdmin(req, res) {
 
 export async function consultarIA(req, res) {
   try {
-    const { mensaje } = sanitizeObject(req.body);
+    const { mensaje, sessionId } = sanitizeObject(req.body);
     const { token } = req.cookies;
     const decoded = jwt.verify(token, TOKEN_SECRET);
     const { id: userId } = decoded;
@@ -1914,40 +1946,68 @@ export async function consultarIA(req, res) {
       });
     }
 
+    let finalSessionId;
+
+    if (sessionId) {
+      // Si viene sessionId desde el frontend, úsalo
+      finalSessionId = sessionId;
+    } else {
+      // Si no viene sessionId, obtener o crear la sesión activa del día
+      finalSessionId = await obtenerSesionActivaDelDia(userId);
+    }
+
+
+    await guardarMensajeHistorial({
+      userId,
+      sessionId: finalSessionId,
+      role: "usuario",
+      contenido: mensaje,
+      tipoMensaje: "texto",
+      estadoConversacion: "esperando_bot"
+    });
+
+
+
     const contextoMemoria = await memoriaService.generarContextoIA(userId, mensaje);
 
-    const { historial } = await memoriaService.obtenerHistorial(userId, 5);
-    const contextoHistorial = historial && historial.length > 0
-      ? historial.map(h => `${h.ia === 'usuario' ? 'Usuario' : 'Asistente'}: ${h.resumenConversacion}`).join('\n')
-      : '';
+    const historial = await HistorialBot.findOne(
+      { userId, sessionId: finalSessionId },
+      { mensajes: { $slice: -10 } }
+    ).lean();
+
+    const contextoConversacion = historial?.mensajes
+      ?.filter(m => ["usuario", "bot"].includes(m.role))
+      .map(m =>
+        `${m.role === "usuario" ? "Usuario" : "Asistente"}: ${m.contenido}`
+      )
+      .join("\n") || "";
+
 
     const prompt = `Eres un asistente personal inteligente y versátil. Puedes hablar de cualquier tema de forma natural.
 
-CONTEXTO DEL USUARIO:
-${contextoMemoria || 'Esta es la primera vez que hablas con este usuario.'}
+  CONTEXTO DEL USUARIO:
+  ${contextoMemoria || 'Esta es la primera vez que hablas con este usuario.'}
 
-${contextoHistorial ? `CONVERSACIÓN RECIENTE:\n${contextoHistorial}\n` : ''}
+  ${contextoConversacion ? `CONVERSACIÓN RECIENTE:\n${contextoConversacion}\n` : ''}
 
-MENSAJE ACTUAL DEL USUARIO:
-"${mensaje}"
+  MENSAJE ACTUAL DEL USUARIO:
+  "${mensaje}"
 
-INSTRUCCIONES:
-1. Responde de forma natural y amigable
-2. Puedes hablar de cualquier tema: tecnología, vida cotidiana, consejos, preguntas generales, etc.
-3. No te limites a un solo tema, sé flexible
-4. Si el usuario solo dice "hola", responde con un saludo simple y natural, no asumas que necesita ayuda con algo específico
-5. Si el usuario te dice gracias, responde con un "No te preocupes" o "De nada" lo importante es que no malgastes recursos allí
-6. Si menciona información nueva sobre él, tómalo en cuenta
-7. No inventes información que no tienes
-8. Sé directo y conciso
-9. No digas que eres un modelo de lenguaje
+  INSTRUCCIONES:
+1. Si dice solo "hola" → responde con saludo simple: "¡Hola! ¿En qué puedo ayudarte?"
+2. Si dice "gracias" → responde: "De nada, ¿necesitas algo más?"
+3. Si pregunta por actividades/tareas → usa la información disponible
+4. NO inventes información que no tienes
+5. NO hagas suposiciones sobre el usuario
+6. Responde de forma directa y natural
+7. Si no entiendes, pide aclaración
 
-FORMATO DE RESPUESTA (JSON sin markdown):
-{
-  "deteccion": "general" | "conversacional" | "técnico",
-  "razon": "Breve razón de tu clasificación",
-  "respuesta": "Tu respuesta natural y útil"
-}`;
+  FORMATO DE RESPUESTA (JSON sin markdown):
+  {
+    "deteccion": "general" | "conversacional" | "técnico",
+    "razon": "Breve razón de tu clasificación",
+    "respuesta": "Tu respuesta natural, clara, concisa y útil"
+  }`;
     const aiResult = await smartAICall(prompt);
 
     // Limpiar respuesta
@@ -1962,14 +2022,25 @@ FORMATO DE RESPUESTA (JSON sin markdown):
 
     // Validar respuesta
     if (!respuestaIA || !respuestaIA.respuesta) {
-      console.error('❌ Respuesta de IA inválida:', aiResult.text);
+
 
       // Fallback: intentar extraer al menos el texto
       return res.status(200).json({
         success: true,
         respuesta: "Disculpa, tuve un problema al procesar tu mensaje. ¿Podrías ser más específico?"
+        , sessionId: finalSessionId
       });
     }
+
+    await guardarMensajeHistorial({
+      userId,
+      sessionId: finalSessionId,
+      role: "bot",
+      contenido: respuestaIA.respuesta, // ← Respuesta completa
+      tipoMensaje: "respuesta_ia",
+      estadoConversacion: "esperando_usuario"
+    });
+
 
     const mensajeCorto = mensaje.length > 150
       ? mensaje.substring(0, 150) + '...'
@@ -1982,22 +2053,24 @@ FORMATO DE RESPUESTA (JSON sin markdown):
     await memoriaService.agregarHistorial(userId, 'usuario', mensajeCorto);
     await memoriaService.agregarHistorial(userId, 'ia', respuestaCorta);
 
+
     return res.status(200).json({
       success: true,
       respuesta: respuestaIA.respuesta.trim(),
-      deteccion: respuestaIA.deteccion
+      deteccion: respuestaIA.deteccion,
+      sessionId: finalSessionId
     });
 
   } catch (error) {
-    console.error("❌ Error en consultarIA:", error);
+
 
     // Log más detallado
     if (error.response) {
-      console.error('Error de API:', error.response.data);
+
     } else if (error.request) {
-      console.error('Error de red:', error.message);
+
     } else {
-      console.error('Error:', error.message);
+
     }
 
     return res.status(500).json({
@@ -2008,7 +2081,7 @@ FORMATO DE RESPUESTA (JSON sin markdown):
 }
 export async function consultarIAProyecto(req, res) {
   try {
-    const { mensaje } = sanitizeObject(req.body);
+    const { mensaje, sessionId } = sanitizeObject(req.body);
     const { token } = req.cookies;
     const decoded = jwt.verify(token, TOKEN_SECRET);
     const { id: userId, email } = decoded;
@@ -2026,6 +2099,25 @@ export async function consultarIAProyecto(req, res) {
         error: "Usuario no autenticado"
       });
     }
+
+    let finalSessionId;
+
+    if (sessionId) {
+      // Si viene sessionId desde el frontend, úsalo
+      finalSessionId = sessionId;
+    } else {
+      // Si no viene sessionId, obtener o crear la sesión activa del día
+      finalSessionId = await obtenerSesionActivaDelDia(userId);
+    }
+
+    await guardarMensajeHistorial({
+      userId,
+      sessionId: finalSessionId,
+      role: "usuario",
+      contenido: mensaje,
+      tipoMensaje: "texto",
+      estadoConversacion: "esperando_bot"
+    });
 
     const contextoMemoria = await memoriaService.generarContextoIA(userId, mensaje);
 
@@ -2046,38 +2138,49 @@ export async function consultarIAProyecto(req, res) {
 
     const tieneActividades = actividadesResumidas.length > 0;
 
-    const { historial } = await memoriaService.obtenerHistorial(userId, 5);
-    const contextoHistorial = historial && historial.length > 0
-      ? historial.map(h => `${h.ia === 'usuario' ? 'Usuario' : 'Asistente'}: ${h.resumenConversacion}`).join('\n')
-      : '';
+    const historial = await HistorialBot.findOne(
+      { userId, sessionId: finalSessionId },
+      { mensajes: { $slice: -10 } }
+    ).lean();
+
+    const contextoConversacion = historial?.mensajes
+      ?.filter(m => ["usuario", "bot"].includes(m.role))
+      .map(m =>
+        `${m.role === "usuario" ? "Usuario" : "Asistente"}: ${m.contenido}`
+      )
+      .join("\n") || "";
 
     const prompt = `Eres un asistente personal inteligente. Tu trabajo es responder de forma natural, útil y relevante.
 
-CONTEXTO DEL USUARIO:
-${contextoMemoria || 'Primera interacción con este usuario.'}
+  CONTEXTO DEL USUARIO:
+  ${contextoMemoria || 'Primera interacción con este usuario.'}
 
-${contextoHistorial ? `CONVERSACIÓN RECIENTE:\n${contextoHistorial}\n` : ''}
+  ${contextoConversacion ? `CONVERSACIÓN RECIENTE:\n${contextoConversacion}\n` : ''}
 
-${tieneActividades ? `ACTIVIDADES Y PENDIENTES DEL USUARIO:\n${JSON.stringify(actividadesResumidas, null, 2)}\n` : 'El usuario no tiene actividades registradas.\n'}
+  ${tieneActividades ? `ACTIVIDADES Y PENDIENTES DEL USUARIO:\n${JSON.stringify(actividadesResumidas, null, 2)}\n` : 'El usuario no tiene actividades registradas.\n'}
 
-MENSAJE ACTUAL DEL USUARIO:
-"${mensaje}"
+  MENSAJE ACTUAL DEL USUARIO:
+  "${mensaje}"
 
-INSTRUCCIONES:
-1. Lee cuidadosamente el mensaje del usuario
-2. Si pregunta sobre sus actividades/proyectos/pendientes, usa la información de ACTIVIDADES
-3. Si pregunta algo general, responde con conocimiento general
-4. Si menciona información nueva sobre él (nombre, gustos, trabajo), tómalo en cuenta
-5. NO inventes información que no tienes
-6. NO asumas cosas del usuario que no están en el contexto
-7. Sé directo y natural en tu respuesta
+  INSTRUCCIONES:
+  1. Lee cuidadosamente el mensaje del usuario
+  2. Si pregunta sobre sus actividades/proyectos/pendientes, usa la información de ACTIVIDADES
+  3. Si pregunta algo general, responde con conocimiento general
+  4. Si pregunta por actividades y NO hay ninguna → dile que aún no tiene actividades registradas
+  5. Si pregunta por actividades y SÍ hay → muéstrale sus actividades
+  6. Responde de forma natural y directa
+  7. NO inventes actividades que no existen
+  8. Si menciona información nueva sobre él (nombre), tómalo en cuenta
+  9. NO inventes información que no tienes
+  10. NO asumas cosas del usuario que no están en el contexto
+  11. Sé directo y natural en tu respuesta
 
-FORMATO DE RESPUESTA (JSON sin markdown):
-{
-  "deteccion": "proyecto" | "general" | "conversacional",
-  "razon": "Breve razón de tu clasificación",
-  "respuesta": "Tu respuesta natural y útil"
-}`;
+  FORMATO DE RESPUESTA (JSON sin markdown):
+  {
+    "deteccion": "proyecto" | "general" | "conversacional",
+    "razon": "Breve razón de tu clasificación",
+    "respuesta": "Tu respuesta natural y útil"
+  }`;
 
     const aiResult = await smartAICall(prompt);
 
@@ -2093,16 +2196,18 @@ FORMATO DE RESPUESTA (JSON sin markdown):
 
     // Validar respuesta
     if (!respuestaIA || !respuestaIA.respuesta) {
-      console.error('❌ Respuesta de IA inválida:', aiResult.text);
+
 
       // Fallback: intentar extraer al menos el texto
       return res.status(200).json({
         success: true,
-        respuesta: "Disculpa, tuve un problema al procesar tu mensaje. ¿Podrías ser más específico?"
+        respuesta: "Disculpa, tuve un problema al procesar tu mensaje. ¿Podrías ser más específico?",
+        sessionId: finalSessionId
+
       });
     }
 
-    const extraccion = await memoriaService.extraerConIA(
+    await memoriaService.extraerConIA(
       userId,
       email,
       mensaje,
@@ -2120,27 +2225,324 @@ FORMATO DE RESPUESTA (JSON sin markdown):
     await memoriaService.agregarHistorial(userId, 'usuario', mensajeCorto);
     await memoriaService.agregarHistorial(userId, 'ia', respuestaCorta);
 
+    await guardarMensajeHistorial({
+      userId,
+      sessionId: finalSessionId,
+      role: "bot",
+      contenido: respuestaCorta,
+      tipoMensaje: "respuesta_ia",
+      estadoConversacion: "esperando_usuario"
+    });
+
     return res.status(200).json({
       success: true,
       respuesta: respuestaIA.respuesta.trim(),
-      deteccion: respuestaIA.deteccion
+      deteccion: respuestaIA.deteccion,
+      sessionId: finalSessionId
+
     });
 
   } catch (error) {
-    console.error("❌ Error en consultarIA:", error);
+
 
     // Log más detallado
     if (error.response) {
-      console.error('Error de API:', error.response.data);
+
     } else if (error.request) {
-      console.error('Error de red:', error.message);
+
     } else {
-      console.error('Error:', error.message);
+
     }
 
     return res.status(500).json({
       success: false,
       error: "Error al conectar con el servicio de IA. Por favor, intenta nuevamente."
+    });
+  }
+}
+
+export async function obtenerMensajesConversacion(req, res) {
+  try {
+    const { sessionId } = req.params;
+    const { token } = req.cookies;
+
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        message: "No autenticado"
+      });
+    }
+
+    const decoded = jwt.verify(token, TOKEN_SECRET);
+    const userId = decoded.id;
+
+    // Buscar el historial específico
+    const historial = await HistorialBot.findOne({
+      userId,
+      sessionId
+    }).lean();
+
+    if (!historial) {
+      return res.status(404).json({
+        success: false,
+        message: "Conversación no encontrada"
+      });
+    }
+
+    // Buscar también las actividades asociadas
+    const actividadesCache = await ActividadesSchema.findOne({
+      odooUserId: userId
+    }).lean();
+
+    // Transformar mensajes al formato del frontend
+    const mensajesFormateados = (historial.mensajes || []).map(msg => ({
+      id: msg._id?.toString() || `${Date.now()}-${Math.random()}`,
+      type: msg.role === 'usuario' ? 'user' :
+        msg.role === 'bot' ? 'bot' : 'system',
+      content: msg.contenido,
+      timestamp: new Date(msg.timestamp),
+      tipoMensaje: msg.tipoMensaje,
+      analisis: msg.analisis || null
+    }));
+
+    return res.json({
+      success: true,
+      sessionId: historial.sessionId,
+      nombreConversacion: historial.nombreConversacion,
+      mensajes: mensajesFormateados,
+      ultimoAnalisis: historial.ultimoAnalisis || null,
+      tareasEstado: historial.tareasEstado || [],
+      estadoConversacion: historial.estadoConversacion,
+      actividades: actividadesCache?.actividades || [],
+      meta: {
+        totalMensajes: mensajesFormateados.length,
+        createdAt: historial.createdAt,
+        updatedAt: historial.updatedAt
+      }
+    });
+
+  } catch (error) {
+
+    return res.status(500).json({
+      success: false,
+      message: "Error interno del servidor",
+      error: error.message
+    });
+  }
+}
+
+export async function obtenerOCrearSessionActual(req, res) {
+  try {
+    const { token } = req.cookies;
+
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        error: "No autenticado"
+      });
+    }
+
+    const decoded = jwt.verify(token, TOKEN_SECRET);
+    const userId = decoded.id;
+
+    // ✅ Obtener o crear sesión del día (ahora crea en DB automáticamente)
+    const sessionId = await obtenerSesionActivaDelDia(userId);
+
+    // ✅ Verificar que se creó correctamente
+    const historial = await HistorialBot.findOne({
+      userId,
+      sessionId
+    }).lean();
+
+    if (!historial) {
+
+      return res.status(500).json({
+        success: false,
+        error: "Error al crear sesión"
+      });
+    }
+
+    return res.json({
+      success: true,
+      sessionId,
+      userId,
+      nombreConversacion: historial.nombreConversacion,
+      estadoConversacion: historial.estadoConversacion,
+      createdAt: historial.createdAt,
+      existe: historial.mensajes?.length > 0
+    });
+
+  } catch (error) {
+
+    console.log("Error al obtener o crear sesión actual:", error);
+
+    return res.status(500).json({
+      success: false,
+      error: "Error interno del servidor"
+    });
+  }
+}
+
+export async function guardarExplicacionesTarde(req, res) {
+  try {
+    const { queHizo, actividadId, pendienteId } = sanitizeObject(req.body);
+
+
+
+    if (!queHizo || !actividadId || !pendienteId) {
+      return res.status(400).json({
+        success: false,
+        message: "Parámetros inválidos",
+      });
+    }
+
+    const actividadDoc = await ActividadesSchema.findOne({
+      "actividades.actividadId": actividadId,
+      "actividades.pendientes.pendienteId": pendienteId,
+    });
+
+    if (!actividadDoc) {
+      return res.status(404).json({
+        success: false,
+        message: "Actividad no encontrada",
+      });
+    }
+
+    const actividad = actividadDoc.actividades.find(
+      (a) => a.actividadId === actividadId
+    );
+
+    if (!actividad) {
+      return res.status(404).json({
+        success: false,
+        message: "Actividad no encontrada",
+      });
+    }
+
+    const pendiente = actividad.pendientes.find(
+      (p) => p.pendienteId === pendienteId
+    );
+
+    if (!pendiente) {
+      return res.status(404).json({
+        success: false,
+        message: "Pendiente no encontrado",
+      });
+    }
+
+
+    const prompt = `Analiza el siguiente reporte de trabajo y determina si la tarea se puede considerar completada.
+
+TAREA: "${pendiente.nombre}"
+DESCRIPCIÓN: "${pendiente.descripcion}"
+REPORTE DEL USUARIO: "${queHizo}"
+
+REGLAS DE EVALUACIÓN:
+1. Sé FLEXIBLE: Si el usuario menciona haber trabajado en la tarea, haber avanzado significativamente o describe detalles técnicos, márcala como COMPLETADA (true).
+2. Solo marca como NO COMPLETADA (false) si el usuario dice explícitamente que no hizo nada, que está totalmente pendiente o que tuvo un bloqueo que le impidió empezar.
+3. Ignora muletillas o lenguaje coloquial; enfócate en la intención de haber realizado el trabajo.
+4. Debes responder OBLIGATORIAMENTE con un objeto JSON NO VACÍO.
+5. NO respondas texto.
+6. NO respondas explicaciones fuera del JSON.
+7. NO respondas {}.
+
+RESPONDE ÚNICAMENTE EN ESTE FORMATO JSON:
+{
+  "completada": true o false,
+  "confianza": 0.0 a 1.0,
+  "razon": "Breve explicación",
+  "evidencias": ["frase 1", "frase 2"]
+}`;
+
+    const aiResult = await smartAICall(prompt);
+
+    // Limpiar respuesta
+    let textoLimpio = aiResult.text.trim();
+
+    // Remover markdown si existe
+    if (textoLimpio.includes('```')) {
+      textoLimpio = textoLimpio.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    }
+
+    const respuestaIA = parseAIJSONSafe(textoLimpio);
+
+    let validacion = {};
+    if (respuestaIA) {
+      try {
+        validacion = JSON.parse(respuestaIA);
+      } catch {
+        validacion = {};
+      }
+    }
+
+
+
+
+    const estaTerminada = typeof validacion.completada === 'boolean'
+      ? validacion.completada
+      : true;
+
+    pendiente.queHizo = queHizo;
+    pendiente.terminada = estaTerminada;
+
+    if (estaTerminada) {
+      pendiente.fechaFinTerminada = new Date();
+    }
+
+    actividad.ultimaActualizacion = new Date();
+    await actividadDoc.save();
+
+    const respuestaFinal = {
+      success: true,
+      completada: estaTerminada,
+      confianza: respuestaIA.confianza || 1.0,
+      razon: respuestaIA.razon || "",
+      evidencias: [],
+      message: respuestaIA.message ? "Tarea marcada como completada" : "Tarea marcada como no completada",
+    };
+
+
+    return res.json(respuestaFinal);
+
+  } catch (error) {
+
+    return res.status(500).json({
+      success: false,
+      message: "Error interno del servidor",
+      error: error.message,
+    });
+  }
+}
+
+export async function eliminarConversacion(req, res) {
+  try {
+    const { sessionId } = req.params;
+
+    if (!sessionId) {
+      return res.status(400).json({
+        success: false,
+        message: "El ID de la sesión es requerido",
+      });
+    }
+
+    const resultado = await HistorialBot.deleteOne({ sessionId });
+
+    if (resultado.deletedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Conversación no encontrada",
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "Conversación eliminada exitosamente",
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Error al eliminar la conversación",
+      error: error.message,
     });
   }
 }

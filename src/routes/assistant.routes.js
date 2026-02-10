@@ -6,34 +6,33 @@ import {
   confirmarEstadoPendientes,
   actualizarEstadoPendientes,
   consultarIA,
-  consultarIAProyecto
+  consultarIAProyecto,
+  obtenerMensajesConversacion,
+  verificarAnalisisDelDia,
+  guardarExplicacionesTarde,
+  eliminarConversacion
 } from '../controllers/assistant.controller.js';
 
 import {
-  // getActividadesLocal,
+  obtenerOCrearSessionActual,
   obtenerHistorialSesion,
   obtenerTodoHistorialSesion,
-  // eliminarHistorialSesion,
   obtenerHistorialSidebar,
   guardarExplicaciones,
   validarExplicacion,
   validarYGuardarExplicacion,
   obtenerActividadesConTiempoHoy,
-  obtenerTodasExplicacionesAdmin,
-  obtenerExplicacionesUsuario
+  obtenerTodasExplicacionesAdmin
 } from '../controllers/assistant.controller.js';
 
 
 // Rutas de historial
+router.get("/session/actual", obtenerOCrearSessionActual);
 router.get('/historial/sesion/:sessionId', obtenerHistorialSesion);
 router.get('/historial/usuario', obtenerTodoHistorialSesion);
 router.get('/historial/titulos', obtenerHistorialSidebar);
 
 // funcion para obtener todo los reportes de obtenerExplicacionesUsuario
-// En tu router (donde tienes las otras rutas de actividades)
-router.get('/explicaciones/usuario/:odooUserId', obtenerExplicacionesUsuario);
-
-
 router.get('/admin/todas-explicaciones', obtenerTodasExplicacionesAdmin);
 
 // Rutas de actividades/pendientes
@@ -45,13 +44,15 @@ router.post('/guardar-explicaciones', guardarExplicaciones);
 router.post('/actividades-con-revisiones', getActividadesConRevisiones);
 router.post('/confirmarEstadoPendientes', confirmarEstadoPendientes);
 
+router.post('/guardarDescripcionTarde', guardarExplicacionesTarde);
+
 router.post('/consultar-ia', consultarIA);
 router.post('/consultar-ia-proyecto', consultarIAProyecto);
 
+router.get('/historial/:sessionId/mensajes', obtenerMensajesConversacion);
+router.get('/analisis/verificar', verificarAnalisisDelDia);
 
-
-// Rutas de historial
-// router.delete('/historial/sesion', eliminarHistorialSesion);
+router.delete("/historial/sesion/:sessionId", eliminarConversacion);
 
 
 export default router;

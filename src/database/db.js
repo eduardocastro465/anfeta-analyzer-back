@@ -3,9 +3,9 @@ import mongoose from "mongoose";
 import dotenv from "dotenv";
 import { formatearFecha } from "../utils/formateo.js";
 import { textoColorido } from "../utils/colorText.js";
+import {MONGO_URI} from "../config.js";
 
 dotenv.config();
-const MONGO_URI = process.env.MONGO_URI;
 
 export const connectDB = async () => {
   const modoProduction = process.env.NODE_ENV === "production";

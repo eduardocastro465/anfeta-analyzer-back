@@ -7,7 +7,7 @@ class MemoriaService {
   // CATEGORÍAS VÁLIDAS (constante de clase)
   // ============================================
   static CATEGORIAS_VALIDAS = ['preferencias', 'personal', 'trabajo', 'habilidades', 'objetivos', 'general', 'conversaciones'];
-  static MAX_HISTORIAL = 50;
+  static MAX_HISTORIAL = 15;
   static LONGITUD_MINIMA_INFO = 10;
   static UMBRAL_SIMILITUD = 0.85; // 85% de similitud = duplicado
 
@@ -43,7 +43,7 @@ class MemoriaService {
           memorias: this._crearMemoriasVacias(),
           relevancia: relevancia || 0.5
         });
-        console.log(`🆕 Documento creado para ${odooUserId}`);
+
       }
 
       // Verificación avanzada de duplicados
@@ -53,7 +53,7 @@ class MemoriaService {
       );
 
       if (resultado.esDuplicado) {
-        console.log(`🔄 Duplicado detectado (${(resultado.similitud * 100).toFixed(1)}%): "${resultado.textoExistente}"`);
+
 
         // Actualización atómica para incrementar relevancia
         await Memoria.findOneAndUpdate(
@@ -84,11 +84,11 @@ class MemoriaService {
         }
       );
 
-      console.log(`➕ [${categoria}]: ${infoNormalizada.substring(0, 50)}...`);
+
       return { success: true, agregado: true };
 
     } catch (error) {
-      console.error('❌ Error al crear memoria:', error.message);
+
       return { success: false, error: error.message };
     }
   }
@@ -121,11 +121,11 @@ class MemoriaService {
         await this._actualizarAcceso(odooUserId);
       }
 
-      console.log(`🔍 ${resultados.length} coincidencias`);
+
       return resultados.slice(0, limite);
 
     } catch (error) {
-      console.error('❌ Error en obtenerRelevantes:', error.message);
+
       return [];
     }
   }
@@ -144,20 +144,18 @@ class MemoriaService {
       if (!memoria) return '';
 
       // Actualizar acceso de forma asíncrona (no bloqueante)
-      this._actualizarAcceso(odooUserId).catch(err =>
-        console.error('Error actualizando acceso:', err)
-      );
+      this._actualizarAcceso(odooUserId).catch(err => { });
 
       // Construcción eficiente del contexto
       const contexto = this._construirContexto(memoria.memorias);
 
       if (!contexto) return '';
 
-      console.log('🧠 Contexto generado');
+
       return `LO QUE SÉ DEL USUARIO:\n${contexto}`;
 
     } catch (error) {
-      console.error('❌ Error generando contexto:', error.message);
+
       return '';
     }
   }
@@ -182,7 +180,7 @@ class MemoriaService {
 
       return { success: true, memorias };
     } catch (error) {
-      console.error('❌ Error en obtenerActivas:', error.message);
+
       return { success: false, memorias: [] };
     }
   }
@@ -199,13 +197,10 @@ class MemoriaService {
 
       const prompt = this._construirPromptExtraccion(mensajeUsuario, respuestaIA);
 
-      console.log('📝 Analizando conversación...');
-
       const resultado = await smartAICall(prompt);
       const data = this._parsearRespuestaIA(resultado.text);
 
       if (!data?.hayMemoria || !Array.isArray(data.memorias)) {
-        console.log('ℹ️  Sin memorias para guardar');
         return { success: true, cantidad: 0 };
       }
 
@@ -230,7 +225,7 @@ class MemoriaService {
 
       await Promise.all(promesas);
 
-      console.log(`💾 ${agregadas} nuevas memorias | 🔄 ${duplicadas} duplicados evitados`);
+
       return {
         success: true,
         cantidad: agregadas,
@@ -238,7 +233,7 @@ class MemoriaService {
       };
 
     } catch (error) {
-      console.error('❌ Error extrayendo memorias:', error.message);
+
       return { success: false };
     }
   }
@@ -283,7 +278,7 @@ class MemoriaService {
       return { success: true };
 
     } catch (error) {
-      console.error('❌ Error en agregarHistorial:', error.message);
+
       return { success: false, error: error.message };
     }
   }
@@ -308,7 +303,7 @@ class MemoriaService {
       };
 
     } catch (error) {
-      console.error('❌ Error en obtenerHistorial:', error.message);
+
       return { success: false, historial: [] };
     }
   }
@@ -330,11 +325,11 @@ class MemoriaService {
         { $mul: { relevancia: 0.9 } }
       );
 
-      console.log(`🔄 ${resultado.modifiedCount} memorias degradadas`);
+
       return { success: true, modificadas: resultado.modifiedCount };
 
     } catch (error) {
-      console.error('❌ Error en degradarRelevancia:', error.message);
+
       return { success: false };
     }
   }
@@ -354,10 +349,10 @@ class MemoriaService {
         return { success: false, mensaje: 'Usuario no encontrado' };
       }
 
-      console.log(`${activa ? '✅ Reactivada' : '🗑️ Desactivada'}: ${odooUserId}`);
+
       return { success: true };
     } catch (error) {
-      console.error('❌ Error en toggleActiva:', error.message);
+
       return { success: false };
     }
   }
@@ -393,17 +388,17 @@ class MemoriaService {
           { $set: { [`memorias.${categoria}`]: [] } }
         );
 
-        console.log(`🗑️  [${categoria}] limpiada`);
+
         return { success: true, mensaje: `Categoría ${categoria} limpiada` };
       }
 
       // Eliminar todo
       await Memoria.deleteOne({ odooUserId });
-      console.log(`🗑️  Todo eliminado: ${odooUserId}`);
+
       return { success: true, mensaje: 'Memorias eliminadas' };
 
     } catch (error) {
-      console.error('❌ Error en limpiar:', error.message);
+
       return { success: false, error: error.message };
     }
   }
@@ -436,7 +431,7 @@ class MemoriaService {
         totalEliminados += eliminados;
 
         if (eliminados > 0) {
-          console.log(`🧹 [${categoria}]: ${eliminados} duplicados eliminados`);
+
         }
       }
 
@@ -446,14 +441,14 @@ class MemoriaService {
         { $set: { memorias: memoriasLimpias } }
       );
 
-      console.log(`✨ Total: ${totalEliminados} duplicados eliminados`);
+
       return {
         success: true,
         eliminados: totalEliminados
       };
 
     } catch (error) {
-      console.error('❌ Error en limpiarDuplicados:', error.message);
+
       return { success: false, error: error.message };
     }
   }
@@ -472,11 +467,11 @@ class MemoriaService {
         return { success: false, mensaje: 'Usuario no encontrado' };
       }
 
-      console.log(`🗑️  Historial limpiado: ${odooUserId}`);
+
       return { success: true };
 
     } catch (error) {
-      console.error('❌ Error en limpiarHistorial:', error.message);
+
       return { success: false, error: error.message };
     }
   }
@@ -517,7 +512,7 @@ class MemoriaService {
       };
 
     } catch (error) {
-      console.error('❌ Error en obtenerEstadisticas:', error.message);
+
       return { success: false, stats: null };
     }
   }
@@ -755,7 +750,7 @@ Responde en JSON (sin markdown):
 
       return parseAIJSONSafe(limpio);
     } catch (error) {
-      console.error('Error parseando IA:', error.message);
+
       return null;
     }
   }

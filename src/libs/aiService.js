@@ -38,7 +38,7 @@ async function llamarGroqConRespaldo(prompt) {
         } catch (error) {
             // Si es error de cuota (429) y tenemos más cuentas, continuamos
             if (error.status === 429 && i < poolGroq.length - 1) {
-                console.warn(`Groq Cuenta ${numCuenta} saturada, rotando...`);
+
                 continue;
             }
             throw error;
@@ -47,55 +47,49 @@ async function llamarGroqConRespaldo(prompt) {
 }
 
 /**
- * Función principal de llamada inteligente (Gemini -> Groq Pool)
- */
-/**
  * Función principal de llamada inteligente (Groq Pool -> Gemini Backup)
  */
 export async function smartAICall(prompt) {
-    // 1. INTENTO PRINCIPAL: Pool de Groq
-    console.log("🚀 Iniciando petición con Groq (Prioridad Alta)...");
     try {
         const groqResult = await llamarGroqConRespaldo(prompt);
         return groqResult; // Si funciona, termina aquí.
     } catch (groqError) {
-        console.error("⚠️ Falló el pool de Groq o todas las cuentas están saturadas.");
-        
+
+
         // 2. RESPALDO (FAILOVER): Gemini
-        console.warn("🔄 Entrando a Gemini como respaldo de emergencia...");
+
         try {
             const geminiResult = await callGeminiWithRetry(async () => {
-                const model = genAI.getGenerativeModel({ 
+                const model = genAI.getGenerativeModel({
                     model: 'gemini-1.5-flash' // El 2.5-lite es experimental, 1.5-flash es más estable
                 });
                 const response = await model.generateContent(prompt);
-                return { 
-                    text: response.response.text(), 
-                    provider: 'Gemini (Backup)' 
+                return {
+                    text: response.response.text(),
+                    provider: 'Gemini (Backup)'
                 };
             }, 1); // Solo un reintento para no perder tiempo si los tokens están agotados
 
             return geminiResult;
         } catch (geminiError) {
-            console.error("❌ CRÍTICO: Falló Groq y también falló Gemini.");
-            
+
+
             // Si llegamos aquí, realmente no hay servicio disponible
             throw new Error("AI_PROVIDER_FAILED");
         }
     }
 }
 
-
 export function parseAIJSONSafe(text) {
-  if (!text) return null;
+    if (!text) return null;
 
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) return null;
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) return null;
 
-  try {
-    return JSON.parse(match[0]);
-  } catch {
-    return null;
-  }
+    try {
+        return JSON.parse(match[0]);
+    } catch {
+        return null;
+    }
 }
 
