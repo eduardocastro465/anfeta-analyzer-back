@@ -65,10 +65,301 @@ export async function verificarAnalisisDelDia(req, res) {
   }
 }
 
-function limpiarNombreColaborador(correo) {
-  if (typeof correo !== 'string') return "Usuario";
-  const nombreBase = correo.split('@')[0].replace(/[^a-zA-Z]/g, '');
-  return nombreBase.charAt(0).toUpperCase() + nombreBase.slice(1);
+export async function verificarCambiosTareas(req, res) {
+  try {
+    const { token } = req.cookies;
+    const decoded = jwt.verify(token, TOKEN_SECRET);
+    const { id: userId, email } = decoded;
+
+    if (!userId || !email) {
+      return res.status(400).json({
+        success: false,
+        error: "Usuario no autenticado"
+      });
+    }
+
+    console.log(`🔍 Verificando cambios para usuario: ${email}`);
+
+    // ✅ Buscar documento del usuario en ActividadesSchema
+    const documento = await ActividadesSchema.findOne({ 
+      odooUserId: userId 
+    }).lean();
+
+    if (!documento || !documento.actividades || documento.actividades.length === 0) {
+      return res.json({
+        success: true,
+        cambios: {
+          totalTareasSinDescripcion: 0,
+          totalTareasConDescripcion: 0,
+          totalTareas: 0,
+          totalActividadesConTareas: 0,
+          ultimaModificacion: new Date(),
+          ultimaActualizacion: new Date()
+        },
+        timestamp: new Date().toISOString(),
+        email: email
+      });
+    }
+
+    // ✅ Procesar actividades y pendientes
+    let totalTareasSinDescripcion = 0;
+    let totalTareasConDescripcion = 0;
+    let totalTareas = 0;
+    let totalActividadesConTareas = 0;
+    let ultimaModificacion = new Date(0);
+    let ultimaActualizacion = new Date(0);
+
+    documento.actividades.forEach(actividad => {
+      if (!actividad.pendientes || actividad.pendientes.length === 0) {
+        return;
+      }
+
+      let actividadTieneTareasPendientes = false;
+
+      actividad.pendientes.forEach(pendiente => {
+        // ✅ Filtrar solo tareas NO terminadas y NO confirmadas
+        if (pendiente.terminada === true || pendiente.confirmada === true) {
+          return;
+        }
+
+        actividadTieneTareasPendientes = true;
+        totalTareas++;
+
+        // ✅ Verificar si tiene descripción
+        const tieneDescripcion = pendiente.descripcion && 
+                                 pendiente.descripcion.trim().length > 0;
+
+        if (tieneDescripcion) {
+          totalTareasConDescripcion++;
+        } else {
+          totalTareasSinDescripcion++;
+        }
+
+        // ✅ Trackear última modificación del pendiente
+        if (pendiente.ultimaActualizacion) {
+          const fechaPendiente = new Date(pendiente.ultimaActualizacion);
+          if (fechaPendiente > ultimaModificacion) {
+            ultimaModificacion = fechaPendiente;
+          }
+        }
+      });
+
+      if (actividadTieneTareasPendientes) {
+        totalActividadesConTareas++;
+
+        // ✅ Trackear última actualización de la actividad
+        if (actividad.ultimaActualizacion) {
+          const fechaActividad = new Date(actividad.ultimaActualizacion);
+          if (fechaActividad > ultimaActualizacion) {
+            ultimaActualizacion = fechaActividad;
+          }
+        }
+      }
+    });
+
+    const resultado = {
+      totalTareasSinDescripcion,
+      totalTareasConDescripcion,
+      totalTareas,
+      totalActividadesConTareas,
+      ultimaModificacion,
+      ultimaActualizacion
+    };
+
+    console.log("📊 Estadísticas de cambios:", resultado);
+
+    return res.json({
+      success: true,
+      cambios: resultado,
+      timestamp: new Date().toISOString(),
+      email: email,
+      userId: userId
+    });
+
+  } catch (error) {
+    console.error("❌ Error en verificarCambiosTareas:", error);
+    
+    return res.status(500).json({
+      success: false,
+      error: "Error al verificar cambios",
+      details: error.message
+    });
+  }
+}
+
+export async function obtenerTareasSinDescripcion(req, res) {
+  try {
+    const { token } = req.cookies;
+    const decoded = jwt.verify(token, TOKEN_SECRET);
+    const { id: userId, email } = decoded;
+
+    console.log(`📥 Obteniendo tareas sin descripción para: ${email}`);
+
+    // ✅ Buscar documento del usuario
+    const documento = await ActividadesSchema.findOne({ 
+      odooUserId: userId 
+    }).lean();
+
+    if (!documento || !documento.actividades || documento.actividades.length === 0) {
+      return res.json({
+        success: true,
+        data: {
+          actividades: [],
+          revisionesPorActividad: []
+        },
+        metrics: {
+          totalActividadesProgramadas: 0,
+          actividadesConTiempoTotal: 0,
+          actividadesFinales: 0,
+          tareasConTiempo: 0,
+          tareasAltaPrioridad: 0,
+          tiempoEstimadoTotal: "0h 0m"
+        },
+        colaboradoresInvolucrados: [email],
+        proyectoPrincipal: "Sin proyecto principal",
+        sessionId: documento?.estadisticas?.ultimaSessionId || `${email}_${new Date().toISOString().split('T')[0]}`,
+        provider: "ActividadesSchema",
+        multiActividad: false
+      });
+    }
+
+    // ✅ Procesar actividades
+    const actividadesProcesadas = [];
+    const revisionesPorActividad = [];
+    let tareasConTiempoGlobal = 0;
+    let tareasAltaPrioridadGlobal = 0;
+    let tiempoTotalMinutos = 0;
+
+    documento.actividades.forEach(actividad => {
+      if (!actividad.pendientes || actividad.pendientes.length === 0) {
+        return;
+      }
+
+      // ✅ Filtrar tareas SIN descripción, NO terminadas, NO confirmadas
+      const tareasSinDescripcion = actividad.pendientes.filter(pendiente => {
+        const noTieneDescripcion = !pendiente.descripcion || 
+                                    pendiente.descripcion.trim().length === 0;
+        const noEstaCompletada = !pendiente.terminada && !pendiente.confirmada;
+        return noTieneDescripcion && noEstaCompletada;
+      });
+
+      if (tareasSinDescripcion.length === 0) {
+        return;
+      }
+
+      // ✅ Mapear tareas al formato esperado
+      const tareasMapeadas = tareasSinDescripcion.map(pendiente => {
+        const duracion = pendiente.duracionMin || 0;
+        const prioridad = pendiente.prioridad || 'MEDIA';
+        
+        if (duracion > 0) tareasConTiempoGlobal++;
+        if (prioridad === 'ALTA' || prioridad === 'URGENTE') tareasAltaPrioridadGlobal++;
+        tiempoTotalMinutos += duracion;
+
+        // ✅ Calcular días pendiente
+        const fechaCreacion = pendiente.fechaCreacion ? new Date(pendiente.fechaCreacion) : new Date();
+        const hoy = new Date();
+        const diasPendiente = Math.floor((hoy - fechaCreacion) / (1000 * 60 * 60 * 24));
+
+        return {
+          id: pendiente.pendienteId || `tarea_${Math.random().toString(36).substr(2, 9)}`,
+          nombre: pendiente.nombre || 'Tarea sin nombre',
+          descripcion: pendiente.descripcion || '',
+          terminada: pendiente.terminada || false,
+          confirmada: pendiente.confirmada || false,
+          reportada: false,
+          duracionMin: duracion,
+          prioridad: prioridad,
+          fechaCreacion: pendiente.fechaCreacion || new Date(),
+          fechaFinTerminada: pendiente.fechaFinTerminada || null,
+          diasPendiente: diasPendiente,
+          colaboradores: [],
+          
+          // ✅ Campos adicionales de tu modelo
+          revisadoPorVoz: pendiente.revisadoPorVoz || false,
+          vecesExplicado: pendiente.vecesExplicado || 0,
+          requiereAtencion: pendiente.requiereAtencion || false,
+          complejidad: pendiente.complejidad || 'MEDIA'
+        };
+      });
+
+      // ✅ Agregar actividad procesada
+      actividadesProcesadas.push({
+        id: actividad.actividadId,
+        titulo: actividad.titulo || 'Sin título',
+        horario: `${actividad.horaInicio || ''} - ${actividad.horaFin || ''}`.trim() || 'Sin horario',
+        status: actividad.status || 'PENDIENTE',
+        proyecto: actividad.tituloProyecto || 'Sin proyecto',
+        colaboradores: [],
+        esHorarioLaboral: true,
+        tieneRevisionesConTiempo: tareasMapeadas.some(t => t.duracionMin > 0)
+      });
+
+      // ✅ Agregar revisión por actividad
+      const tiempoActividad = tareasMapeadas.reduce((sum, t) => sum + t.duracionMin, 0);
+      const horas = Math.floor(tiempoActividad / 60);
+      const minutos = tiempoActividad % 60;
+
+      revisionesPorActividad.push({
+        actividadId: actividad.actividadId,
+        actividadTitulo: actividad.titulo || 'Sin título',
+        actividadHorario: `${actividad.horaInicio || ''} - ${actividad.horaFin || ''}`.trim() || 'Sin horario',
+        colaboradores: [],
+        assigneesOriginales: [],
+        tareasConTiempo: tareasMapeadas,
+        totalTareasConTiempo: tareasMapeadas.filter(t => t.duracionMin > 0).length,
+        tareasAltaPrioridad: tareasMapeadas.filter(t => 
+          t.prioridad === 'ALTA' || t.prioridad === 'URGENTE'
+        ).length,
+        tiempoTotal: tiempoActividad,
+        tiempoFormateado: `${horas}h ${minutos}m`
+      });
+    });
+
+    // ✅ Calcular tiempo total
+    const horasTotal = Math.floor(tiempoTotalMinutos / 60);
+    const minutosTotal = tiempoTotalMinutos % 60;
+
+    const respuesta = {
+      success: true,
+      answer: "Tareas sin descripción obtenidas exitosamente",
+      data: {
+        actividades: actividadesProcesadas,
+        revisionesPorActividad: revisionesPorActividad
+      },
+      metrics: {
+        totalActividadesProgramadas: documento.actividades.length,
+        actividadesConTiempoTotal: actividadesProcesadas.length,
+        actividadesFinales: actividadesProcesadas.length,
+        tareasConTiempo: tareasConTiempoGlobal,
+        tareasAltaPrioridad: tareasAltaPrioridadGlobal,
+        tiempoEstimadoTotal: `${horasTotal}h ${minutosTotal}m`
+      },
+      colaboradoresInvolucrados: [email],
+      proyectoPrincipal: documento.actividades[0]?.tituloProyecto || "Sin proyecto principal",
+      sessionId: documento.estadisticas?.ultimaSessionId || `${email}_${new Date().toISOString().split('T')[0]}`,
+      provider: "ActividadesSchema",
+      multiActividad: revisionesPorActividad.length > 1,
+      timestamp: new Date().toISOString()
+    };
+
+    console.log("✅ Tareas sin descripción obtenidas:", {
+      actividades: actividadesProcesadas.length,
+      totalTareas: tareasConTiempoGlobal,
+      revisiones: revisionesPorActividad.length
+    });
+
+    return res.json(respuesta);
+
+  } catch (error) {
+    console.error("❌ Error en obtenerTareasSinDescripcion:", error);
+    
+    return res.status(500).json({
+      success: false,
+      error: "Error al obtener tareas sin descripción",
+      details: error.message
+    });
+  }
 }
 
 function extraerColaboradoresUnicos(actividadGeneral) {
@@ -87,194 +378,280 @@ function formatearHoraUTC(utcTimeString) {
   return date.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' });
 }
 
+// ========== FUNCIONES HELPER ==========
+
+/**
+ * Convierte una hora en formato "HH:MM" a número decimal
+ * Ejemplo: "09:30" → 9.5, "17:00" → 17.0
+ */
+function convertirHoraADecimal(hora) {
+  if (!hora || typeof hora !== 'string') return 0;
+  
+  const [horas, minutos] = hora.split(':').map(Number);
+  
+  if (isNaN(horas) || isNaN(minutos)) return 0;
+  
+  return horas + (minutos / 60);
+}
+
+/**
+ * Limpia el nombre de un colaborador
+ * Ejemplo: "eedua@practicante.com" → "Eduardo"
+ */
+function limpiarNombreColaborador(email) {
+  if (!email || typeof email !== 'string') return '';
+  
+  // Si es un email, extraer la parte antes del @
+  if (email.includes('@')) {
+    const username = email.split('@')[0];
+    
+    // Capitalizar primera letra
+    return username.charAt(0).toUpperCase() + username.slice(1);
+  }
+  
+  // Si ya es un nombre, retornarlo tal cual
+  return email;
+}
+
+// ========== FUNCIÓN PRINCIPAL ==========
+
 export async function getActividadesConRevisiones(req, res) {
   try {
-    const { email, question = "¿Qué actividades y revisiones tengo hoy? ¿Qué me recomiendas priorizar?", showAll = false } = sanitizeObject(req.body);
+    const { 
+      email, 
+      question = "¿Qué actividades y revisiones tengo hoy? ¿Qué me recomiendas priorizar?", 
+      showAll = false 
+    } = sanitizeObject(req.body);
 
     if (!email) {
-      return res.status(400).json({ success: false, message: "El email es requerido" });
+      return res.status(400).json({ 
+        success: false, 
+        message: "El email es requerido" 
+      });
     }
 
-    const responseGlobal = await axios.get(`https://wlserver-production-6735.up.railway.app/api/actividades/`);
-    const todasLasActividadesDB = responseGlobal.data.data;
-
+    // 1️⃣ Obtener datos del usuario
     const usersData = await getAllUsers();
-    const user = usersData.items.find((u) => u.email.toLowerCase() === email.toLowerCase());
-    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+    const user = usersData.items.find(
+      (u) => u.email.toLowerCase() === email.toLowerCase()
+    );
+
+    if (!user) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
 
     const { token } = req.cookies;
     const decoded = jwt.verify(token, TOKEN_SECRET);
     const odooUserId = decoded.id;
     const sessionId = await obtenerSesionActivaDelDia(odooUserId);
 
-    // 2️⃣ Obtener actividades del día específicas del usuario
-    const actividadesUsuarioRes = await axios.get(`${API_URL_ANFETA}/actividades/assignee/${email}/del-dia`);
-    const actividadesRaw = actividadesUsuarioRes.data.data;
+    const today = new Date().toISOString().split('T')[0];
+
+    // 2️⃣ Obtener actividades del usuario (1ra llamada HTTP)
+    const actividadesResponse = await axios.get(
+      `${API_URL_ANFETA}/actividades/assignee/${email}/del-dia`
+    );
+    const actividadesRaw = actividadesResponse.data.data;
 
     if (!Array.isArray(actividadesRaw) || actividadesRaw.length === 0) {
-      const respuestaSinActividades = "No tienes actividades registradas para hoy";
       return res.json({
         success: true,
-        answer: respuestaSinActividades,
+        answer: "No tienes actividades registradas para hoy",
         sessionId: sessionId,
         actividades: [],
         revisionesPorActividad: {}
       });
     }
 
-    // 3️⃣ Obtener Revisiones (Tareas pendientes)
-    const today = new Date().toISOString().split('T')[0];
+    // 3️⃣ Filtrar actividades válidas (excluir 00ftf y 00sec)
+    const esActividadValida = (actividad) => {
+      const titulo = actividad.titulo?.toLowerCase() || "";
+      return !titulo.startsWith("00ftf") && actividad.status !== "00sec";
+    };
+
+    let actividadesFiltradas = actividadesRaw.filter(esActividadValida);
+
+    if (actividadesFiltradas.length === 0) {
+      return res.json({
+        success: true,
+        answer: "Todas tus actividades de hoy son de tipo 00ftf o 00sec (filtradas automáticamente)",
+        sessionId: sessionId,
+        actividades: [],
+        revisionesPorActividad: {}
+      });
+    }
+
+    // 4️⃣ Filtrar por horario laboral (9:30 - 17:00)
+    const HORARIO_INICIO = 9.5;  // 9:30 AM
+    const HORARIO_FIN = 17.0;    // 5:00 PM
+
+    const actividadesEnHorarioLaboral = actividadesFiltradas.filter(actividad => {
+      const horaInicioDecimal = convertirHoraADecimal(actividad.horaInicio);
+      const horaFinDecimal = convertirHoraADecimal(actividad.horaFin);
+      return horaInicioDecimal >= HORARIO_INICIO &&
+        horaInicioDecimal < HORARIO_FIN &&
+        horaFinDecimal <= HORARIO_FIN;
+    });
+
+    if (actividadesEnHorarioLaboral.length === 0) {
+      return res.json({
+        success: true,
+        answer: "No tienes actividades programadas en horario laboral (09:30-17:00).",
+        sessionId: sessionId,
+        actividades: [],
+        revisionesPorActividad: {}
+      });
+    }
+
+    // 5️⃣ IDs de actividades en horario laboral
+    const actividadIdsHorarioLaboral = new Set(
+      actividadesEnHorarioLaboral.map(a => a.id)
+    );
+
+    // 6️⃣ Obtener revisiones (2da llamada HTTP)
     let todasRevisiones = { colaboradores: [] };
     try {
-      const revisionesRes = await axios.get(`${API_URL_ANFETA}/reportes/revisiones-por-fecha`, {
-        params: { date: today, colaborador: email }
-      });
-      if (revisionesRes.data?.success) todasRevisiones = revisionesRes.data.data;
+      const revisionesResponse = await axios.get(
+        `${API_URL_ANFETA}/reportes/revisiones-por-fecha`,
+        {
+          params: {
+            date: today,
+            colaborador: email
+          }
+        }
+      );
+      if (revisionesResponse.data?.success) {
+        todasRevisiones = revisionesResponse.data.data || { colaboradores: [] };
+      }
     } catch (e) {
       console.warn("Error obteniendo revisiones:", e.message);
     }
 
-    // 4️⃣ FILTRADO Y CRUCE DE DATOS
+    // 7️⃣ Procesar revisiones y extraer colaboradores
     const revisionesPorActividad = {};
     const actividadesConRevisionesConTiempoIds = new Set();
+    const todosColaboradoresSet = new Set();
 
-    // Filtramos actividades iniciales (excluir 00ftf y 00sec)
-    let actividadesFiltradas = actividadesRaw.filter(act => {
-      const tiene00ftf = act.titulo.toLowerCase().includes('00ftf');
-      const es00sec = act.status === "00sec" || act.titulo.toLowerCase().includes('00sec');
-      return !tiene00ftf && !es00sec;
-    });
-
-    const actividadIds = actividadesFiltradas.map(a => a.id);
-
-    // Procesar revisiones y cruzar con datos globales
     if (todasRevisiones.colaboradores && Array.isArray(todasRevisiones.colaboradores)) {
       todasRevisiones.colaboradores.forEach(colaborador => {
         (colaborador.items?.actividades ?? []).forEach(actividadRev => {
-          if (actividadIds.includes(actividadRev.id) && actividadRev.pendientes) {
-            // Buscar en la data global para obtener colaboradores
-            const actividadGlobal = todasLasActividadesDB.find(a => a.id === actividadRev.id);
-            const actividadOriginal = actividadesFiltradas.find(a => a.id === actividadRev.id);
+          // Filtro 1: Solo actividades en horario laboral
+          if (!actividadIdsHorarioLaboral.has(actividadRev.id)) return;
+          
+          // Filtro 2: Excluir 00ftf
+          if (actividadRev.titulo.toLowerCase().includes('00ftf')) return;
+          
+          // Filtro 3: Verificar pendientes
+          if (!actividadRev.pendientes || actividadRev.pendientes.length === 0) return;
 
-            if (!actividadGlobal) return;
+          const actividadOriginal = actividadesEnHorarioLaboral.find(a => a.id === actividadRev.id);
+          if (!actividadOriginal) return;
 
-            // Extraer colaboradores del endpoint global
-            const colaboradoresActividad = extraerColaboradoresUnicos(actividadGlobal);
-
-            revisionesPorActividad[actividadRev.id] = {
-              actividad: {
-                id: actividadRev.id,
-                titulo: actividadOriginal?.titulo || actividadGlobal.titulo,
-                horaInicio: actividadOriginal?.horaInicio || formatearHoraUTC(actividadGlobal.dueStart),
-                horaFin: actividadOriginal?.horaFin || formatearHoraUTC(actividadGlobal.dueEnd),
-                status: actividadOriginal?.status || actividadGlobal.status || "Sin status",
-                proyecto: actividadGlobal.project?.name || "Sin proyecto",
-                colaboradores: colaboradoresActividad,
-                assigneesDirectos: actividadGlobal.assignees || []
-              },
-              pendientesConTiempo: [],
-              pendientesSinTiempo: []
-            };
-
-            (actividadRev.pendientes ?? []).forEach(p => {
-              const estaAsignado = p.assignees?.some(a => a.name === email);
-              if (!estaAsignado) return;
-
-              const pendienteInfo = {
-                id: p.id,
-                nombre: p.nombre,
-                terminada: p.terminada,
-                confirmada: p.confirmada,
-                duracionMin: p.duracionMin || 0,
-                fechaCreacion: p.fechaCreacion,
-                fechaFinTerminada: p.fechaFinTerminada,
-                diasPendiente: p.fechaCreacion ?
-                  Math.floor((new Date() - new Date(p.fechaCreacion)) / (1000 * 60 * 60 * 24)) : 0,
-                colaboradores: p.assignees ? p.assignees.map(a => limpiarNombreColaborador(a.name)) : []
-              };
-
-              if (p.duracionMin && p.duracionMin > 0) {
-                pendienteInfo.prioridad = p.duracionMin > 60 ? "ALTA" :
-                  p.duracionMin > 30 ? "MEDIA" : "BAJA";
-                revisionesPorActividad[actividadRev.id].pendientesConTiempo.push(pendienteInfo);
-                actividadesConRevisionesConTiempoIds.add(actividadRev.id);
-              } else {
-                pendienteInfo.prioridad = "SIN TIEMPO";
-                revisionesPorActividad[actividadRev.id].pendientesSinTiempo.push(pendienteInfo);
+          // ✅ Extraer colaboradores únicos de TODOS los pendientes de esta actividad
+          const colaboradoresActividad = new Set();
+          (actividadRev.pendientes ?? []).forEach(pendiente => {
+            (pendiente.assignees ?? []).forEach(assignee => {
+              if (assignee.name) {
+                const nombreLimpio = limpiarNombreColaborador(assignee.name);
+                colaboradoresActividad.add(nombreLimpio);
+                todosColaboradoresSet.add(nombreLimpio);
               }
             });
+          });
+
+          // Inicializar estructura
+          revisionesPorActividad[actividadRev.id] = {
+            actividad: {
+              id: actividadRev.id,
+              titulo: actividadOriginal?.titulo || actividadRev.titulo,
+              horaInicio: actividadOriginal.horaInicio || "00:00",
+              horaFin: actividadOriginal.horaFin || "00:00",
+              status: actividadOriginal.status || "Sin status",
+              proyecto: actividadOriginal.tituloProyecto || "Sin proyecto",
+              colaboradores: Array.from(colaboradoresActividad),
+              assigneesDirectos: Array.from(colaboradoresActividad)
+            },
+            pendientesConTiempo: [],
+            pendientesSinTiempo: []
+          };
+
+          // Procesar pendientes
+          (actividadRev.pendientes ?? []).forEach(p => {
+            // Filtro 4: Verificar asignación al usuario
+            const estaAsignado = p.assignees?.some(a => a.name === email);
+            if (!estaAsignado) return;
+
+            const pendienteInfo = {
+              id: p.id,
+              nombre: p.nombre,
+              terminada: p.terminada,
+              confirmada: p.confirmada,
+              duracionMin: p.duracionMin || 0,
+              fechaCreacion: p.fechaCreacion,
+              fechaFinTerminada: p.fechaFinTerminada,
+              diasPendiente: p.fechaCreacion ?
+                Math.floor((new Date() - new Date(p.fechaCreacion)) / (1000 * 60 * 60 * 24)) : 0,
+              colaboradores: p.assignees ? 
+                p.assignees.map(a => limpiarNombreColaborador(a.name)).filter(Boolean) : []
+            };
+
+            // Clasificar: Con tiempo vs Sin tiempo
+            if (p.duracionMin && p.duracionMin > 0) {
+              pendienteInfo.prioridad = p.duracionMin > 60 ? "ALTA" :
+                p.duracionMin > 30 ? "MEDIA" : "BAJA";
+              revisionesPorActividad[actividadRev.id].pendientesConTiempo.push(pendienteInfo);
+              actividadesConRevisionesConTiempoIds.add(actividadRev.id);
+            } else {
+              pendienteInfo.prioridad = "SIN TIEMPO";
+              revisionesPorActividad[actividadRev.id].pendientesSinTiempo.push(pendienteInfo);
+            }
+          });
+
+          // Eliminar si no tiene tareas con tiempo
+          if (revisionesPorActividad[actividadRev.id].pendientesConTiempo.length === 0) {
+            delete revisionesPorActividad[actividadRev.id];
           }
         });
       });
     }
 
-    // 5️⃣ Filtrar actividades finales (horario laboral + tareas con tiempo)
-    const actividadesFinales = actividadesFiltradas.filter(actividad => {
-      const tieneRevisionesConTiempo = actividadesConRevisionesConTiempoIds.has(actividad.id);
-      if (!tieneRevisionesConTiempo) return false;
+    // 8️⃣ Actividades finales
+    const actividadesFinales = actividadesEnHorarioLaboral.filter(actividad =>
+      actividadesConRevisionesConTiempoIds.has(actividad.id)
+    );
 
-      const horaInicio = parseInt(actividad.horaInicio.split(':')[0]);
-      const estaEnHorarioLaboral = horaInicio >= 9 && horaInicio <= 17;
-      return estaEnHorarioLaboral;
-    });
-
-    // Si no hay actividades válidas
     if (actividadesFinales.length === 0) {
-      const actividadesConTiempo = actividadesFiltradas.filter(a =>
-        actividadesConRevisionesConTiempoIds.has(a.id)
-      );
-
-      const actividadesHorarioLaboral = actividadesFiltradas.filter(a => {
-        const horaInicio = parseInt(a.horaInicio.split(':')[0]);
-        return horaInicio >= 9 && horaInicio <= 17;
-      });
-
-      let mensajeError = "";
-      if (actividadesConTiempo.length === 0) {
-        mensajeError = "No tienes actividades con tareas que tengan tiempo estimado para hoy.";
-      } else if (actividadesHorarioLaboral.length === 0) {
-        mensajeError = "No tienes actividades programadas en horario laboral (09:00-17:30).";
-      } else {
-        mensajeError = `Tienes ${actividadesConTiempo.length} actividades con tareas con tiempo, pero ninguna en horario laboral.`;
-      }
-
       return res.json({
         success: true,
-        answer: mensajeError,
+        answer: "No tienes actividades con tareas que tengan tiempo estimado en horario laboral (09:30-17:00).",
         sessionId: sessionId,
-        actividadesTotales: actividadesFiltradas.length,
-        actividadesConTiempo: actividadesConTiempo.length,
-        actividadesHorarioLaboral: actividadesHorarioLaboral.length,
-        actividadesFinales: 0,
+        actividades: [],
+        revisionesPorActividad: {}
       });
     }
 
-    // 6️⃣ Calcular métricas y colaboradores
+    // 9️⃣ Calcular métricas
     let totalTareasConTiempo = 0;
     let totalTareasSinTiempo = 0;
     let tareasAltaPrioridad = 0;
     let tiempoTotalEstimado = 0;
-    const todosColaboradoresSet = new Set();
 
     actividadesFinales.forEach(actividad => {
-      const revisiones = revisionesPorActividad[actividad.id] || { pendientesConTiempo: [], pendientesSinTiempo: [] };
+      const revisiones = revisionesPorActividad[actividad.id] || { 
+        pendientesConTiempo: [], 
+        pendientesSinTiempo: [] 
+      };
       totalTareasConTiempo += revisiones.pendientesConTiempo.length;
       totalTareasSinTiempo += revisiones.pendientesSinTiempo.length;
       tareasAltaPrioridad += revisiones.pendientesConTiempo.filter(t => t.prioridad === "ALTA").length;
       tiempoTotalEstimado += revisiones.pendientesConTiempo.reduce((sum, t) => sum + (t.duracionMin || 0), 0);
-
-      // Agregar colaboradores de la actividad
-      if (revisiones.actividad?.colaboradores) {
-        revisiones.actividad.colaboradores.forEach(colaborador => {
-          todosColaboradoresSet.add(colaborador);
-        });
-      }
     });
 
     const horasTotales = Math.floor(tiempoTotalEstimado / 60);
     const minutosTotales = tiempoTotalEstimado % 60;
     const colaboradoresTotales = Array.from(todosColaboradoresSet);
 
+    // 🔟 Determinar proyecto principal
     let proyectoPrincipal = "Sin proyecto específico";
     if (actividadesFinales.length > 0) {
       const actividadPrincipal = actividadesFinales[0];
@@ -290,21 +667,21 @@ export async function getActividadesConRevisiones(req, res) {
       }
     }
 
-    // 7️⃣ Construir prompt para IA
+    // 1️⃣1️⃣ Construir prompt para IA
     const prompt = `
 Eres un asistente que analiza ÚNICAMENTE actividades que:
 1. Tienen revisiones CON TIEMPO estimado
-2. Están en horario laboral (09:00-17:30)
+2. Están en horario laboral (09:30-17:00)
 3. Se han filtrado actividades 00ftf y status 00sec
 
 Usuario: ${user.firstName} (${email})
 
-RESUMEN DE ACTIVIDADES CON REVISIONES CON TIEMPO (09:00-17:30):
-• Total actividades: ${actividadesFinales.length}
-• Total tareas con tiempo: ${totalTareasConTiempo}
-• Tareas de alta prioridad: ${tareasAltaPrioridad}
-• Tiempo estimado total: ${horasTotales}h ${minutosTotales}m
-• Colaboradores involucrados: ${colaboradoresTotales.length > 0 ? colaboradoresTotales.join(', ') : 'Ninguno'}
+RESUMEN DE ACTIVIDADES CON REVISIONES CON TIEMPO (09:30-17:00):
+- Total actividades: ${actividadesFinales.length}
+- Total tareas con tiempo: ${totalTareasConTiempo}
+- Tareas de alta prioridad: ${tareasAltaPrioridad}
+- Tiempo estimado total: ${horasTotales}h ${minutosTotales}m
+- Colaboradores involucrados: ${colaboradoresTotales.length > 0 ? colaboradoresTotales.join(', ') : 'Ninguno'}
 
 DETALLE DE ACTIVIDADES (SOLO TAREAS CON TIEMPO):
 ${actividadesFinales.map((actividad, index) => {
@@ -335,7 +712,7 @@ ${index + 1}. ${actividad.horaInicio} - ${actividad.horaFin} - ${actividad.titul
 PREGUNTA DEL USUARIO: "${question}"
 
 INSTRUCCIONES ESTRICTAS DE RESPUESTA:
-1. COMIENZA específicamente: "En tu horario laboral (09:00-17:30), tienes ${actividadesFinales.length} actividades con tareas que tienen tiempo estimado"
+1. COMIENZA específicamente: "En tu horario laboral (09:30-17:00), tienes ${actividadesFinales.length} actividades con tareas que tienen tiempo estimado"
 2. MENCIONA a los colaboradores de cada actividad: "En 'X actividad' trabajas con [nombres]"
 3. ENFÓCATE EXCLUSIVAMENTE en las tareas CON TIEMPO (${totalTareasConTiempo} tareas)
 4. Da RECOMENDACIONES ESPECÍFICAS considerando:
@@ -348,9 +725,15 @@ INSTRUCCIONES ESTRICTAS DE RESPUESTA:
 8. EVITA mencionar "tareas sin tiempo", "sin estimación", etc.
 `.trim();
 
+    // 1️⃣2️⃣ Llamar a IA
     const aiResult = await smartAICall(prompt);
 
-    // 8️⃣ Preparar respuesta estructurada
+    // 1️⃣3️⃣ Obtener actividades guardadas (para descripciones)
+    const actividadesGuardadas = await ActividadesSchema.findOne({
+      odooUserId: odooUserId
+    });
+
+    // 1️⃣4️⃣ Preparar respuesta estructurada
     const respuestaData = {
       actividades: actividadesFinales.map(a => {
         const revisiones = revisionesPorActividad[a.id];
@@ -371,16 +754,27 @@ INSTRUCCIONES ESTRICTAS DE RESPUESTA:
           const revisiones = revisionesPorActividad[actividad.id];
           if (!revisiones || revisiones.pendientesConTiempo.length === 0) return null;
 
+          const actividadGuardada = actividadesGuardadas?.actividades?.find(
+            a => a.actividadId === actividad.id
+          );
+
           return {
             actividadId: actividad.id,
             actividadTitulo: actividad.titulo,
             actividadHorario: `${actividad.horaInicio} - ${actividad.horaFin}`,
             colaboradores: revisiones.actividad?.colaboradores || [],
             assigneesOriginales: revisiones.actividad?.assigneesDirectos || [],
-            tareasConTiempo: revisiones.pendientesConTiempo.map(t => ({
-              ...t,
-              colaboradores: t.colaboradores || []
-            })),
+            tareasConTiempo: revisiones.pendientesConTiempo.map(tarea => {
+              // Buscar descripción en la actividad guardada
+              const pendienteGuardado = actividadGuardada?.pendientes?.find(
+                p => p.pendienteId === tarea.id
+              );
+
+              return {
+                ...tarea,
+                descripcion: pendienteGuardado?.descripcion || ""
+              };
+            }),
             totalTareasConTiempo: revisiones.pendientesConTiempo.length,
             tareasAltaPrioridad: revisiones.pendientesConTiempo.filter(t => t.prioridad === "ALTA").length,
             tiempoTotal: revisiones.pendientesConTiempo.reduce((sum, t) => sum + (t.duracionMin || 0), 0),
@@ -390,7 +784,7 @@ INSTRUCCIONES ESTRICTAS DE RESPUESTA:
         .filter(item => item !== null)
     };
 
-    // ✅ GUARDAR EN HISTORIAL
+    // 1️⃣5️⃣ Preparar análisis completo
     const analisisCompleto = {
       success: true,
       answer: aiResult.text,
@@ -414,6 +808,7 @@ INSTRUCCIONES ESTRICTAS DE RESPUESTA:
       sugerencias: []
     };
 
+    // 1️⃣6️⃣ Preparar estado de tareas
     const tareasEstadoArray = respuestaData.revisionesPorActividad.flatMap(r =>
       (r.tareasConTiempo || []).map(t => ({
         taskId: t.id,
@@ -426,6 +821,7 @@ INSTRUCCIONES ESTRICTAS DE RESPUESTA:
       }))
     );
 
+    // 1️⃣7️⃣ Generar nombre de conversación con IA
     const promptNombreConversacion = `
 Genera un TÍTULO MUY CORTO para una conversación.
 
@@ -459,6 +855,72 @@ RESPONDE SOLO EL TÍTULO
       console.warn("No se pudo generar nombre de conversación con IA");
     }
 
+    // 1️⃣8️⃣ Guardar en base de datos (Actividades)
+    const actividadesExistentes = await ActividadesSchema.findOne({
+      odooUserId: odooUserId
+    });
+
+    const actividadesParaGuardar = actividadesFinales.map(actividad => {
+      const revisiones = revisionesPorActividad[actividad.id];
+
+      const todasLasTareas = [
+        ...(revisiones.pendientesConTiempo || []),
+        ...(revisiones.pendientesSinTiempo || [])
+      ];
+
+      // Buscar la actividad existente para preservar descripciones
+      const actividadExistente = actividadesExistentes?.actividades?.find(
+        a => a.actividadId === actividad.id
+      );
+
+      return {
+        actividadId: actividad.id,
+        titulo: actividad.titulo,
+        horaInicio: actividad.horaInicio,
+        horaFin: actividad.horaFin,
+        status: actividad.status,
+        fecha: today,
+        colaboradores: revisiones.actividad?.colaboradores || [],
+        assigneesOriginales: revisiones.actividad?.assigneesDirectos || [],
+        pendientes: todasLasTareas.map(t => {
+          const pendienteExistente = actividadExistente?.pendientes?.find(
+            p => p.pendienteId === t.id
+          );
+
+          return {
+            pendienteId: t.id,
+            nombre: t.nombre,
+            descripcion: t.descripcion && t.descripcion.trim() !== ""
+              ? t.descripcion
+              : (pendienteExistente?.descripcion || ""),
+            queHizo: t.queHizo && t.queHizo.trim() !== ""
+              ? t.queHizo
+              : (pendienteExistente?.queHizo || ""),
+            terminada: t.terminada,
+            confirmada: t.confirmada,
+            duracionMin: t.duracionMin,
+            fechaCreacion: t.fechaCreacion,
+            fechaFinTerminada: t.fechaFinTerminada,
+            colaboradores: t.colaboradores || []
+          };
+        }),
+        ultimaActualizacion: new Date()
+      };
+    });
+
+    await ActividadesSchema.findOneAndUpdate(
+      { odooUserId: odooUserId },
+      {
+        $set: {
+          odooUserId: odooUserId,
+          actividades: actividadesParaGuardar,
+          ultimaSincronizacion: new Date()
+        }
+      },
+      { upsert: true, new: true }
+    );
+
+    // 1️⃣9️⃣ Guardar en historial (solo si no existe análisis inicial)
     const sesionExistente = await HistorialBot.findOne({
       userId: odooUserId,
       sessionId: sessionId
@@ -468,9 +930,7 @@ RESPONDE SOLO EL TÍTULO
       msg => msg.tipoMensaje === "analisis_inicial"
     );
 
-    // Si no existe un analisis inicial, procede
     if (!yaExisteAnalisisInicial) {
-
       await HistorialBot.findOneAndUpdate(
         {
           userId: odooUserId,
@@ -494,47 +954,13 @@ RESPONDE SOLO EL TÍTULO
           }
         },
         {
-          upsert: true,  // ✅ Crear si no existe (aunque ya debería existir)
-          new: true      // ✅ Devolver el documento actualizado
+          upsert: true,
+          new: true
         }
       );
     }
 
-
-    // await ActividadesSchema.findOneAndUpdate(
-    //   { odooUserId: odooUserId },
-    //   {
-    //     $set: {
-    //       odooUserId: odooUserId,
-    //       actividades: respuestaData.revisionesPorActividad.map(rev => ({
-    //         actividadId: rev.actividadId,
-    //         titulo: rev.actividadTitulo,
-    //         horaInicio: rev.actividadHorario.split(' - ')[0],
-    //         horaFin: rev.actividadHorario.split(' - ')[1],
-    //         status: "activo",
-    //         fecha: new Date().toISOString().split('T')[0],
-    //         colaboradores: rev.colaboradores || [],
-    //         assigneesOriginales: rev.assigneesOriginales || [],
-    //         pendientes: rev.tareasConTiempo.map(t => ({
-    //           pendienteId: t.id,
-    //           nombre: t.nombre,
-    //           descripcion: "",
-    //           terminada: t.terminada,
-    //           confirmada: t.confirmada,
-    //           duracionMin: t.duracionMin,
-    //           fechaCreacion: t.fechaCreacion,
-    //           fechaFinTerminada: t.fechaFinTerminada,
-    //           colaboradores: t.colaboradores || []
-    //         })),
-    //         ultimaActualizacion: new Date()
-    //       })),
-    //       ultimaSincronizacion: new Date()
-    //     }
-    //   },
-    //   { upsert: true, new: true }
-    // );
-
-    // 9️⃣ Respuesta final
+    // 2️⃣0️⃣ Respuesta final
     return res.json({
       success: true,
       answer: aiResult.text,
@@ -556,7 +982,7 @@ RESPONDE SOLO EL TÍTULO
       filtrosAplicados: {
         excluir00ftf: true,
         excluir00sec: true,
-        soloHorarioLaboral: "09:00-17:30",
+        soloHorarioLaboral: "09:30-17:00",
         soloTareasConTiempo: true,
         excluirTareasSinTiempo: true
       }
@@ -578,10 +1004,11 @@ RESPONDE SOLO EL TÍTULO
       });
     }
 
-    console.error("Error:", error);
+    console.error("Error en getActividadesConRevisiones:", error);
     return res.status(500).json({
       success: false,
-      message: "Error interno"
+      message: "Error interno",
+      error: error.message
     });
   }
 }
