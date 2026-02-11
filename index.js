@@ -16,6 +16,7 @@ const modoProduction = process.env.NODE_ENV === "production";
 await connectDB();
 const app = express();
 
+const PORT = process.env.PORT || 4000;
 
 
 // Rutas
@@ -63,10 +64,9 @@ app.use(`/api/${API_VERSION}/admin`, adminRouter);
 app.use(`/api/${API_VERSION}/auth`, authRoutes);
 app.use(`/api/${API_VERSION}/reportes`, reportesRoutes);
 
-const PORT = process.env.PORT || 4000;
 
 // Server
-app.listen(PORT, () => {
+app.listen(PORT, "0.0.0.0", () => {
   textoColorido(
     [`Servidor corriendo en el puerto: ${PORT} 🖥`],
     ["rgb(33, 97, 235)", "rgb(46, 15, 183)"],
