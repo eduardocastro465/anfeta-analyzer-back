@@ -5,7 +5,7 @@ import morgan from "morgan";
 import helmet from "helmet";
 import cookieParser from "cookie-parser";
 import { textoColorido } from "./src/utils/colorText.js";
-import { CORS_ORIGINS, API_VERSION, PORT } from "./src/config.js";
+import { CORS_ORIGINS, API_VERSION } from "./src/config.js";
 import { connectDB } from "./src/database/db.js";
 
 // Constantes
@@ -61,6 +61,8 @@ app.use(`/api/${API_VERSION}/assistant`, assistantRoutes);
 app.use(`/api/${API_VERSION}/admin`, adminRouter);
 app.use(`/api/${API_VERSION}/auth`, authRoutes);
 app.use(`/api/${API_VERSION}/reportes`, reportesRoutes);
+
+const PORT = Number(process.env.PORT) || 4000;
 
 // Server
 app.listen(PORT, () => {

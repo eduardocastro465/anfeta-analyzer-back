@@ -23,7 +23,7 @@ import {
   validarYGuardarExplicacion,
   obtenerActividadesConTiempoHoy,
   obtenerTodasExplicacionesAdmin,
-  obtenerTareasSinDescripcion,
+  // obtenerTareasSinDescripcion,
   verificarCambiosTareas
 } from '../controllers/assistant.controller.js';
 
@@ -58,7 +58,7 @@ router.delete("/historial/sesion/:sessionId", eliminarConversacion);
 
 
 router.get('/verificar-cambios-tareas', verificarCambiosTareas);
-router.get('/tareas-sin-descripcion', obtenerTareasSinDescripcion);
+// router.get('/tareas-sin-descripcion', obtenerTareasSinDescripcion);
 
 
 export default router;
