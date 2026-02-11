@@ -1,6 +1,6 @@
 import { Router } from "express";
 
-const router = Router();
+import {authMiddleware} from "../middlewares/auth.middleware.js";
 import {
   getActividadesConRevisiones,
   confirmarEstadoPendientes,
@@ -27,6 +27,9 @@ import {
   verificarCambiosTareas
 } from '../controllers/assistant.controller.js';
 
+
+
+const router = Router();
 
 // Rutas de historial
 router.get("/session/actual", obtenerOCrearSessionActual);
@@ -57,7 +60,7 @@ router.get('/analisis/verificar', verificarAnalisisDelDia);
 router.delete("/historial/sesion/:sessionId", eliminarConversacion);
 
 
-router.get('/verificar-cambios-tareas', verificarCambiosTareas);
+router.get('/verificar-cambios-tareas', authMiddleware, verificarCambiosTareas);
 // router.get('/tareas-sin-descripcion', obtenerTareasSinDescripcion);
 
 
