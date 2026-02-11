@@ -11,7 +11,9 @@ export const connectDB = async () => {
   const modoProduction = process.env.NODE_ENV === "production";
 
   try {
+    console.log("Conectando a la base de datos...");
     await mongoose.connect(MONGO_URI);
+    
 
     const fechaActual = new Date();
     const fechaFormateada = formatearFecha(fechaActual);

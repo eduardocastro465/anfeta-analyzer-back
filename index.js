@@ -1,6 +1,5 @@
-if (process.env.NODE_ENV !== "production") {
-  await import("dotenv/config");
-}
+import "dotenv/config";
+
 import express from "express";
 import cors from "cors";
 import morgan from "morgan";
@@ -64,7 +63,7 @@ app.use(`/api/${API_VERSION}/admin`, adminRouter);
 app.use(`/api/${API_VERSION}/auth`, authRoutes);
 app.use(`/api/${API_VERSION}/reportes`, reportesRoutes);
 
-const PORT = Number(process.env.PORT) || 4000;
+const PORT = process.env.PORT || 4000;
 
 // Server
 app.listen(PORT, () => {
