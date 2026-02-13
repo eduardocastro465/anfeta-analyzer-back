@@ -11,6 +11,7 @@ import HistorialBot from "../models/historialBot.model.js";
 import { TOKEN_SECRET, API_URL_ANFETA } from '../config.js';
 import { obtenerSesionActivaDelDia } from '../libs/generarSessionIdDiario.js';
 import { guardarMensajeHistorial } from "../Helpers/historial.helper.js";
+import crypto from 'crypto';
 
 export async function verificarAnalisisDelDia(req, res) {
   try {
@@ -78,9 +79,6 @@ export async function verificarCambiosTareas(req, res) {
       });
     }
 
-    console.log(`🔍 Verificando cambios para usuario: ${email}`);
-
-    // ✅ Buscar documento del usuario en ActividadesSchema
     const documento = await ActividadesSchema.findOne({
       odooUserId: userId
     }).lean();
@@ -93,21 +91,24 @@ export async function verificarCambiosTareas(req, res) {
           totalTareasConDescripcion: 0,
           totalTareas: 0,
           totalActividadesConTareas: 0,
-          ultimaModificacion: new Date(),
-          ultimaActualizacion: new Date()
+          ultimaModificacion: new Date().toISOString(),
+          ultimaActualizacion: new Date().toISOString(),
+          checksum: "" // ✅ NUEVO
         },
         timestamp: new Date().toISOString(),
         email: email
       });
     }
 
-    // ✅ Procesar actividades y pendientes
     let totalTareasSinDescripcion = 0;
     let totalTareasConDescripcion = 0;
     let totalTareas = 0;
     let totalActividadesConTareas = 0;
     let ultimaModificacion = new Date(0);
     let ultimaActualizacion = new Date(0);
+
+    // ✅ NUEVO: Array para generar checksum
+    const tareasParaHash = [];
 
     documento.actividades.forEach(actividad => {
       if (!actividad.pendientes || actividad.pendientes.length === 0) {
@@ -117,12 +118,10 @@ export async function verificarCambiosTareas(req, res) {
       let actividadTieneTareasPendientes = false;
 
       actividad.pendientes.forEach(pendiente => {
-        // ✅ FILTRO 1: Solo tareas NO terminadas y NO confirmadas
         if (pendiente.terminada === true || pendiente.confirmada === true) {
           return;
         }
 
-        // ✅ FILTRO 2: Solo tareas CON tiempo asignado (duracionMin > 0)
         if (!pendiente.duracionMin || pendiente.duracionMin <= 0) {
           return;
         }
@@ -130,7 +129,6 @@ export async function verificarCambiosTareas(req, res) {
         actividadTieneTareasPendientes = true;
         totalTareas++;
 
-        // ✅ Verificar si tiene descripción
         const tieneDescripcion = pendiente.descripcion &&
           pendiente.descripcion.trim().length > 0;
 
@@ -140,7 +138,14 @@ export async function verificarCambiosTareas(req, res) {
           totalTareasSinDescripcion++;
         }
 
-        // ✅ Trackear última modificación del pendiente
+        // ✅ NUEVO: Agregar al array para hash
+        tareasParaHash.push({
+          id: pendiente._id ? pendiente._id.toString() : pendiente.id || String(Math.random()),
+          descripcion: pendiente.descripcion || "",
+          duracionMin: pendiente.duracionMin,
+          ultimaActualizacion: pendiente.ultimaActualizacion
+        });
+
         if (pendiente.ultimaActualizacion) {
           const fechaPendiente = new Date(pendiente.ultimaActualizacion);
           if (fechaPendiente > ultimaModificacion) {
@@ -152,7 +157,6 @@ export async function verificarCambiosTareas(req, res) {
       if (actividadTieneTareasPendientes) {
         totalActividadesConTareas++;
 
-        // ✅ Trackear última actualización de la actividad
         if (actividad.ultimaActualizacion) {
           const fechaActividad = new Date(actividad.ultimaActualizacion);
           if (fechaActividad > ultimaActualizacion) {
@@ -162,16 +166,22 @@ export async function verificarCambiosTareas(req, res) {
       }
     });
 
+    // ✅ NUEVO: Generar checksum simple
+    const checksumString = JSON.stringify(tareasParaHash);
+    const checksum = crypto
+      .createHash('md5')
+      .update(checksumString)
+      .digest('hex');
+
     const resultado = {
       totalTareasSinDescripcion,
       totalTareasConDescripcion,
       totalTareas,
       totalActividadesConTareas,
-      ultimaModificacion,
-      ultimaActualizacion
+      ultimaModificacion: ultimaModificacion.toISOString(),
+      ultimaActualizacion: ultimaActualizacion.toISOString(),
+      checksum // ✅ NUEVO
     };
-
-    console.log("📊 Estadísticas de cambios (solo tareas con tiempo):", resultado);
 
     return res.json({
       success: true,
@@ -182,7 +192,7 @@ export async function verificarCambiosTareas(req, res) {
     });
 
   } catch (error) {
-    console.error("❌ Error en verificarCambiosTareas:", error);
+    console.error("Error en verificarCambiosTareas:", error);
 
     return res.status(500).json({
       success: false,
@@ -277,7 +287,7 @@ export async function getActividadesConRevisiones(req, res) {
       });
     }
 
-    // 4️⃣ Filtrar por horario laboral (9:30 - 17:00)
+    // 4 Filtrar por horario laboral (9:30 - 17:00)
     const HORARIO_INICIO = 9.5;  // 9:30 AM
     const HORARIO_FIN = 17.0;    // 5:00 PM
 
@@ -299,12 +309,12 @@ export async function getActividadesConRevisiones(req, res) {
       });
     }
 
-    // 5️⃣ IDs de actividades en horario laboral
+    // 5 IDs de actividades en horario laboral
     const actividadIdsHorarioLaboral = new Set(
       actividadesEnHorarioLaboral.map(a => a.id)
     );
 
-    // 6️⃣ Obtener revisiones (2da llamada HTTP)
+    // 6 Obtener revisiones (2da llamada HTTP)
     let todasRevisiones = { colaboradores: [] };
     try {
       const revisionesResponse = await axios.get(
@@ -323,7 +333,7 @@ export async function getActividadesConRevisiones(req, res) {
       console.warn("Error obteniendo revisiones:", e.message);
     }
 
-    // 7️⃣ Procesar revisiones y extraer colaboradores
+    // 7 Procesar revisiones y extraer colaboradores
     const revisionesPorActividad = {};
     const actividadesConRevisionesConTiempoIds = new Set();
     const todosColaboradoresSet = new Set();
@@ -343,17 +353,8 @@ export async function getActividadesConRevisiones(req, res) {
           const actividadOriginal = actividadesEnHorarioLaboral.find(a => a.id === actividadRev.id);
           if (!actividadOriginal) return;
 
-          // ✅ Extraer colaboradores únicos de TODOS los pendientes de esta actividad
+          // ✅ MOVER: Inicializar Set ANTES del loop
           const colaboradoresActividad = new Set();
-          (actividadRev.pendientes ?? []).forEach(pendiente => {
-            (pendiente.assignees ?? []).forEach(assignee => {
-              if (assignee.name) {
-                const nombreLimpio = limpiarNombreColaborador(assignee.name);
-                colaboradoresActividad.add(nombreLimpio);
-                todosColaboradoresSet.add(nombreLimpio);
-              }
-            });
-          });
 
           // Inicializar estructura
           revisionesPorActividad[actividadRev.id] = {
@@ -364,8 +365,8 @@ export async function getActividadesConRevisiones(req, res) {
               horaFin: actividadOriginal.horaFin || "00:00",
               status: actividadOriginal.status || "Sin status",
               proyecto: actividadOriginal.tituloProyecto || "Sin proyecto",
-              colaboradores: Array.from(colaboradoresActividad),
-              assigneesDirectos: Array.from(colaboradoresActividad)
+              colaboradores: [], // ✅ Se llenará después
+              assigneesDirectos: [] // ✅ Se llenará después
             },
             pendientesConTiempo: [],
             pendientesSinTiempo: []
@@ -376,6 +377,18 @@ export async function getActividadesConRevisiones(req, res) {
             // Filtro 4: Verificar asignación al usuario
             const estaAsignado = p.assignees?.some(a => a.name === email);
             if (!estaAsignado) return;
+
+            // ✅ NUEVO: Extraer colaboradores SOLO de tareas asignadas a ti
+            (p.assignees ?? []).forEach(assignee => {
+              if (!assignee.name) return;
+
+              // Excluir al usuario actual
+              if (assignee.name.toLowerCase() === email.toLowerCase()) return;
+
+              const nombreLimpio = limpiarNombreColaborador(assignee.name);
+              colaboradoresActividad.add(nombreLimpio);
+              todosColaboradoresSet.add(nombreLimpio);
+            });
 
             const pendienteInfo = {
               id: p.id,
@@ -388,7 +401,10 @@ export async function getActividadesConRevisiones(req, res) {
               diasPendiente: p.fechaCreacion ?
                 Math.floor((new Date() - new Date(p.fechaCreacion)) / (1000 * 60 * 60 * 24)) : 0,
               colaboradores: p.assignees ?
-                p.assignees.map(a => limpiarNombreColaborador(a.name)).filter(Boolean) : []
+                p.assignees
+                  .map(a => limpiarNombreColaborador(a.name))
+                  .filter(nombre => nombre && nombre.toLowerCase() !== email.toLowerCase()) // ✅ Excluir usuario actual
+                : []
             };
 
             // Clasificar: Con tiempo vs Sin tiempo
@@ -403,6 +419,10 @@ export async function getActividadesConRevisiones(req, res) {
             }
           });
 
+          // ✅ NUEVO: Asignar colaboradores DESPUÉS del loop
+          revisionesPorActividad[actividadRev.id].actividad.colaboradores = Array.from(colaboradoresActividad);
+          revisionesPorActividad[actividadRev.id].actividad.assigneesDirectos = Array.from(colaboradoresActividad);
+
           // Eliminar si no tiene tareas con tiempo
           if (revisionesPorActividad[actividadRev.id].pendientesConTiempo.length === 0) {
             delete revisionesPorActividad[actividadRev.id];
@@ -411,7 +431,7 @@ export async function getActividadesConRevisiones(req, res) {
       });
     }
 
-    // 8️⃣ Actividades finales
+    // 8 Actividades finales
     const actividadesFinales = actividadesEnHorarioLaboral.filter(actividad =>
       actividadesConRevisionesConTiempoIds.has(actividad.id)
     );
@@ -426,7 +446,7 @@ export async function getActividadesConRevisiones(req, res) {
       });
     }
 
-    // 9️⃣ Calcular métricas
+    // 9 Calcular métricas
     let totalTareasConTiempo = 0;
     let totalTareasSinTiempo = 0;
     let tareasAltaPrioridad = 0;
@@ -447,7 +467,7 @@ export async function getActividadesConRevisiones(req, res) {
     const minutosTotales = tiempoTotalEstimado % 60;
     const colaboradoresTotales = Array.from(todosColaboradoresSet);
 
-    // 🔟 Determinar proyecto principal
+    // 10 Determinar proyecto principal
     let proyectoPrincipal = "Sin proyecto específico";
     if (actividadesFinales.length > 0) {
       const actividadPrincipal = actividadesFinales[0];
@@ -463,7 +483,7 @@ export async function getActividadesConRevisiones(req, res) {
       }
     }
 
-    // 1️⃣1️⃣ Construir prompt para IA
+    // 11 Construir prompt para IA
     const prompt = `
 Eres un asistente que analiza ÚNICAMENTE actividades que:
 1. Tienen revisiones CON TIEMPO estimado
@@ -521,15 +541,15 @@ INSTRUCCIONES ESTRICTAS DE RESPUESTA:
 8. EVITA mencionar "tareas sin tiempo", "sin estimación", etc.
 `.trim();
 
-    // 1️⃣2️⃣ Llamar a IA
+    // 12 Llamar a IA
     const aiResult = await smartAICall(prompt);
 
-    // 1️⃣3️⃣ Obtener actividades guardadas (para descripciones)
+    // 13 Obtener actividades guardadas (para descripciones)
     const actividadesGuardadas = await ActividadesSchema.findOne({
       odooUserId: odooUserId
     });
 
-    // 1️⃣4️⃣ Preparar respuesta estructurada
+    // 14 Preparar respuesta estructurada
     const respuestaData = {
       actividades: actividadesFinales.map(a => {
         const revisiones = revisionesPorActividad[a.id];
@@ -580,7 +600,7 @@ INSTRUCCIONES ESTRICTAS DE RESPUESTA:
         .filter(item => item !== null)
     };
 
-    // 1️⃣5️⃣ Preparar análisis completo
+    // 15 Preparar análisis completo
     const analisisCompleto = {
       success: true,
       answer: aiResult.text,
@@ -604,7 +624,7 @@ INSTRUCCIONES ESTRICTAS DE RESPUESTA:
       sugerencias: []
     };
 
-    // 1️⃣6️⃣ Preparar estado de tareas
+    // 16 Preparar estado de tareas
     const tareasEstadoArray = respuestaData.revisionesPorActividad.flatMap(r =>
       (r.tareasConTiempo || []).map(t => ({
         taskId: t.id,
@@ -617,7 +637,7 @@ INSTRUCCIONES ESTRICTAS DE RESPUESTA:
       }))
     );
 
-    // 1️⃣7️⃣ Generar nombre de conversación con IA
+    // 17 Generar nombre de conversación con IA
     const promptNombreConversacion = `
 Genera un TÍTULO MUY CORTO para una conversación.
 
@@ -651,7 +671,7 @@ RESPONDE SOLO EL TÍTULO
       console.warn("No se pudo generar nombre de conversación con IA");
     }
 
-    // 1️⃣8️⃣ Guardar en base de datos (Actividades)
+    // 18 Guardar en base de datos (Actividades)
     const actividadesExistentes = await ActividadesSchema.findOne({
       odooUserId: odooUserId
     });
@@ -716,7 +736,7 @@ RESPONDE SOLO EL TÍTULO
       { upsert: true, new: true }
     );
 
-    // 1️⃣9️⃣ Guardar en historial (solo si no existe análisis inicial)
+    // 19 Guardar en historial (solo si no existe análisis inicial)
     const sesionExistente = await HistorialBot.findOne({
       userId: odooUserId,
       sessionId: sessionId
@@ -756,7 +776,7 @@ RESPONDE SOLO EL TÍTULO
       );
     }
 
-    // 2️⃣0️⃣ Respuesta final
+    // 20 Respuesta final
     return res.json({
       success: true,
       answer: aiResult.text,
@@ -835,7 +855,7 @@ export async function getTareasTerminadasConRevisiones(req, res) {
 
     const sessionId = await generarSessionIdDiario(odooUserId);
 
-    // 1️ Obtener actividades del día para el usuario
+    // 1 Obtener actividades del día para el usuario
     const actividadesResponse = await axios.get(
       `${API_URL_ANFETA}/actividades/assignee/${email}/del-dia`
     );
@@ -854,11 +874,11 @@ export async function getTareasTerminadasConRevisiones(req, res) {
       });
     }
 
-    // 2️ Obtener fecha actual para las revisiones
+    // 2 Obtener fecha actual para las revisiones
     const today = new Date();
     const formattedToday = today.toISOString().split('T')[0];
 
-    // 3️ Obtener TODAS las revisiones del día
+    // 3 Obtener TODAS las revisiones del día
     let todasRevisiones = { colaboradores: [] };
     try {
       const revisionesResponse = await axios.get(
@@ -878,17 +898,17 @@ export async function getTareasTerminadasConRevisiones(req, res) {
       console.warn("Error obteniendo revisiones:", error.message);
     }
 
-    // 4️ Filtrar actividades (igual que antes)
+    // 4 Filtrar actividades (igual que antes)
     let actividadesFiltradas = actividadesRaw.filter((actividad) => {
       const tiene00ftf = actividad.titulo.toLowerCase().includes('00ftf');
       const es00sec = actividad.status === "00sec";
       return !tiene00ftf && !es00sec;
     });
 
-    // 5️ Extraer IDs de todas las actividades filtradas
+    // 5 Extraer IDs de todas las actividades filtradas
     const actividadIds = actividadesFiltradas.map(a => a.id);
 
-    // 6️ Procesar revisiones - SOLO TAREAS TERMINADAS
+    // 6 Procesar revisiones - SOLO TAREAS TERMINADAS
     const revisionesPorActividad = {};
     const actividadesConTareasTerminadasIds = new Set();
     let totalTareasTerminadas = 0;
@@ -971,12 +991,12 @@ export async function getTareasTerminadasConRevisiones(req, res) {
       });
     }
 
-    // 7️ Filtrar actividades que tienen al menos una tarea terminada
+    // 7 Filtrar actividades que tienen al menos una tarea terminada
     const actividadesConTerminadas = actividadesFiltradas.filter(actividad =>
       actividadesConTareasTerminadasIds.has(actividad.id)
     );
 
-    // 8️ Si no hay tareas terminadas
+    // 8 Si no hay tareas terminadas
     if (actividadesConTerminadas.length === 0 || totalTareasTerminadas === 0) {
       return res.json({
         success: true,
@@ -992,7 +1012,7 @@ export async function getTareasTerminadasConRevisiones(req, res) {
     const minutosTotales = tiempoTotalTerminado % 60;
     const colaboradoresTotales = Array.from(todosColaboradoresSet);
 
-    // 9️ Construir prompt para tareas terminadas
+    // 9 Construir prompt para tareas terminadas
     const prompt = `
 Eres un asistente que analiza las tareas TERMINADAS de hoy.
 
@@ -1021,7 +1041,7 @@ ${index + 1}. ${actividad.titulo}
       terminadas.forEach((tarea, i) => {
         actividadTexto += `
      ${i + 1}. ${tarea.nombre}
-        - ${tarea.confirmada ? '✅ CONFIRMADA' : '⚠️ POR CONFIRMAR'}
+        - ${tarea.confirmada ? 'CONFIRMADA' : 'POR CONFIRMAR'}
         - ${tarea.duracionMin || 0} min ${tarea.prioridad ? `| Prioridad original: ${tarea.prioridad}` : ''}
         - Días en pendiente: ${tarea.diasPendiente}d
         - Colaboradores: ${tarea.colaboradores?.join(', ') || 'Ninguno'}`;
@@ -1315,10 +1335,6 @@ export async function validarExplicacion(req, res) {
 
     const { token } = req.cookies;
 
-
-
-    console.log(explanation)
-
     const prompt = `
 Eres un asistente que valida si un comentario del usuario
 está realmente relacionado con una tarea específica
@@ -1362,10 +1378,6 @@ RESPONDE ÚNICAMENTE EN JSON CON ESTE FORMATO EXACTO:
       return res.status(500).json({ valida: false, razon: "La IA no respondió." });
     }
 
-
-    console.log(resultadoIA);
-
-
     // Estructura de respuesta final (reutilizable para la misma ruta)
     const respuesta = {
       valida: resultadoIA.esDelTema === true,
@@ -1376,9 +1388,8 @@ RESPONDE ÚNICAMENTE EN JSON CON ESTE FORMATO EXACTO:
 
     // Log para monitoreo interno
     if (!respuesta.valida) {
-      console.log(`[Validación Fallida] Tarea: ${taskName} | Motivo: ${respuesta.categoriaMotivo}`);
-    }
 
+    }
 
     return res.json(respuesta);
 
@@ -1400,21 +1411,12 @@ export async function validarYGuardarExplicacion(req, res) {
       nombrePendiente,
       explicacion,
       duracionMin,
-      userEmail,      // 🔥 Email del usuario
-      userId,         // 🔥 ID o email alternativo
+      userEmail,      // Email del usuario
+      userId,         // ID o email alternativo
       sessionId,
-      priority,       // 🔥 Prioridad de la tarea (opcional)
-      duration       // 🔥 Duración (opcional)
+      priority,       // Prioridad de la tarea (opcional)
+      duration       // Duración (opcional)
     } = req.body;
-
-    console.log("📧 ========== DATOS RECIBIDOS ==========");
-    console.log("📧 Email del usuario:", userEmail || userId);
-    console.log("📋 Actividad:", actividadTitulo);
-    console.log("✅ Pendiente:", nombrePendiente);
-    console.log("📝 Explicación:", explicacion);
-    console.log("⏱️  Duración:", duracionMin || duration);
-    console.log("🎯 Prioridad:", priority);
-    console.log("🆔 Session ID:", sessionId);
 
     // Validar datos esenciales
     if (!actividadId || !idPendiente || !explicacion) {
@@ -1436,7 +1438,7 @@ export async function validarYGuardarExplicacion(req, res) {
 
     const decoded = jwt.verify(token, TOKEN_SECRET);
     const odooUserId = decoded.id;
-    console.log("👤 Odoo User ID:", odooUserId);
+
 
     // Validar con IA
     const prompt = `
@@ -1470,7 +1472,7 @@ Responde ÚNICAMENTE en JSON:
 }
 `;
 
-    console.log("🤖 Enviando a IA para validación...");
+
     const aiResult = await smartAICall(prompt);
 
     if (!aiResult || !aiResult.text) {
@@ -1481,11 +1483,11 @@ Responde ÚNICAMENTE en JSON:
       });
     }
 
-    console.log("🤖 RESPUESTA DE IA:", aiResult.text);
+
     const aiEvaluation = parseAIJSONSafe(aiResult.text);
 
     if (!aiEvaluation.esValida) {
-      console.log("❌ Explicación rechazada por IA:", aiEvaluation.razon);
+
       return res.status(200).json({
         esValida: false,
         razon: aiEvaluation.razon,
@@ -1497,9 +1499,9 @@ Responde ÚNICAMENTE en JSON:
       });
     }
 
-    console.log("✅ Explicación validada por IA:", aiEvaluation.razon);
 
-    // 🔥 PREPARAR DATOS PARA GUARDAR
+
+    // PREPARAR DATOS PARA GUARDAR
     const emailUsuario = userEmail || userId || "email-no-proporcionado";
     const fechaActual = new Date();
 
@@ -1519,9 +1521,9 @@ Responde ÚNICAMENTE en JSON:
       }
     };
 
-    console.log("💾 Guardando en base de datos...");
 
-    // 🔥 ACTUALIZACIÓN COMPLETA CON TODOS LOS CAMPOS
+
+    // ACTUALIZACIÓN COMPLETA CON TODOS LOS CAMPOS
     const resultado = await ActividadesSchema.findOneAndUpdate(
       {
         odooUserId: odooUserId,
@@ -1564,7 +1566,12 @@ Responde ÚNICAMENTE en JSON:
             fecha: fechaActual,
             validadaPorIA: true,
             razonIA: aiEvaluation.razon,
-            sessionId: sessionId
+            sessionId: sessionId,
+            resultado: {
+              esValida: true,
+              puntuacion: null,
+              feedback: aiEvaluation.razon
+            }
           }
         }
       },
@@ -1574,7 +1581,7 @@ Responde ÚNICAMENTE en JSON:
           { "pend.pendienteId": idPendiente }
         ],
         new: true,
-        runValidators: true
+        runValidators: false
       }
     );
 
@@ -1595,33 +1602,63 @@ Responde ÚNICAMENTE en JSON:
       p => p.pendienteId === idPendiente
     );
 
-    console.log("✅ GUARDADO EXITOSO:");
-    console.log("📝 Explicación guardada:", pendienteGuardado?.descripcion);
-    console.log("📧 Email del usuario:", pendienteGuardado?.explicacionVoz?.emailUsuario);
-    console.log("📅 Fecha de registro:", pendienteGuardado?.explicacionVoz?.fechaRegistro);
-    console.log("🤖 Validada por IA:", pendienteGuardado?.explicacionVoz?.validadaPorIA);
-    console.log("💾 En historial:", pendienteGuardado?.historialExplicaciones?.length || 0, "registros");
+    // 🔄 SINCRONIZAR CON OTROS USUARIOS QUE COMPARTEN EL PENDIENTE
+    await ActividadesSchema.updateMany(
+      {
+        odooUserId: { $ne: odooUserId }, // ❌ excluir usuario origen
+        "actividades.actividadId": actividadId,
+        "actividades.pendientes.pendienteId": idPendiente
+      },
+      {
+        $set: {
+          "actividades.$[act].pendientes.$[pend].descripcion": explicacion,
+          "actividades.$[act].pendientes.$[pend].explicacionVoz": datosExplicacion,
 
-    // 🔍 VERIFICACIÓN EN DB (para debug)
-    const verificacionDB = await ActividadesSchema.findOne({
-      odooUserId: odooUserId,
-      "actividades.actividadId": actividadId,
-    }).lean();
+          "actividades.$[act].ultimaActualizacion": fechaActual,
+          "actividades.$[act].actualizadoPor": emailUsuario,
+          "actividades.$[act].fechaRevisionVoz": fechaActual,
 
-    const actividadDB = verificacionDB?.actividades.find(
-      a => a.actividadId === actividadId
+          "actividades.$[act].pendientes.$[pend].ultimaActualizacion": fechaActual,
+          "actividades.$[act].pendientes.$[pend].actualizadoPor": emailUsuario,
+          "actividades.$[act].pendientes.$[pend].revisadoPorVoz": true,
+          "actividades.$[act].pendientes.$[pend].fechaRevisionVoz": fechaActual,
+
+          ...(priority && {
+            "actividades.$[act].pendientes.$[pend].prioridad": priority
+          }),
+          ...(duracionMin && {
+            "actividades.$[act].pendientes.$[pend].duracionMin": duracionMin
+          })
+        },
+
+        $push: {
+          "actividades.$[act].pendientes.$[pend].historialExplicaciones": {
+            texto: explicacion,
+            emailUsuario: emailUsuario,
+            fecha: fechaActual,
+            validadaPorIA: true,
+            razonIA: aiEvaluation.razon,
+            sessionId: sessionId,
+            resultado: {
+              esValida: true,
+              puntuacion: null,
+              feedback: aiEvaluation.razon
+            }
+          }
+        }
+      },
+      {
+        arrayFilters: [
+          { "act.actividadId": actividadId },
+          { "pend.pendienteId": idPendiente }
+        ]
+      }
     );
 
-    const pendienteDB = actividadDB?.pendientes.find(
-      p => p.pendienteId === idPendiente
-    );
 
-    console.log("🔍 VERIFICACIÓN EN BASE DE DATOS:");
-    console.log("📧 Email guardado:", pendienteDB?.explicacionVoz?.emailUsuario);
-    console.log("📝 Explicación en DB:", pendienteDB?.descripcion);
-    console.log("🔄 Revisado por voz:", pendienteDB?.revisadoPorVoz);
 
-    // 📊 PREPARAR RESPUESTA COMPLETA
+
+    //  PREPARAR RESPUESTA COMPLETA
     const respuesta = {
       esValida: true,
       mensaje: "Explicación validada y guardada exitosamente",
@@ -1653,31 +1690,12 @@ Responde ÚNICAMENTE en JSON:
       }
     };
 
-    console.log("📤 Enviando respuesta al cliente...");
-    console.log("✅ Estado: EXITOSO");
+
 
     return res.status(200).json(respuesta);
 
   } catch (error) {
-    console.error("❌ ERROR EN validarYGuardarExplicacion:");
-    console.error("📌 Mensaje:", error.message);
-    console.error("📌 Stack:", error.stack);
-
-    if (error.name === 'JsonWebTokenError') {
-      return res.status(401).json({
-        esValida: false,
-        razon: "Token inválido o expirado"
-      });
-    }
-
-    if (error.name === 'ValidationError') {
-      return res.status(400).json({
-        esValida: false,
-        razon: "Error de validación de datos",
-        detalles: error.message
-      });
-    }
-
+    console.error("Error en validarYGuardarExplicacion:", error);
     return res.status(500).json({
       esValida: false,
       razon: "Error interno del servidor",
@@ -1698,7 +1716,7 @@ export async function guardarExplicaciones(req, res) {
     const decoded = jwt.verify(token, TOKEN_SECRET);
     const odooUserId = decoded.id;
 
-    console.log(explanations);
+
 
     // 1. Documento raíz del usuario
     let registroUsuario = await ActividadesSchema.findOne({ odooUserId });
@@ -1965,7 +1983,7 @@ export async function obtenerHistorialSesion(req, res) {
     });
 
   } catch (error) {
-    console.error("❌ Error al obtener sesión:", error);
+    console.error("Error al obtener sesión:", error);
     return res.status(500).json({
       success: false,
       message: "Error interno del servidor",
@@ -2023,7 +2041,7 @@ export async function obtenerTodoHistorialSesion(req, res) {
     });
 
   } catch (error) {
-    console.error("❌ Error al obtener el historial semanal:", error);
+    console.error("Error al obtener el historial semanal:", error);
     return res.status(500).json({
       success: false,
       message: "Error interno del servidor",
@@ -2145,7 +2163,7 @@ export async function obtenerTodasExplicacionesAdmin(req, res) {
     });
 
   } catch (error) {
-    console.error("❌ Error en obtenerTodasExplicacionesAdmin:", error);
+    console.error("Error en obtenerTodasExplicacionesAdmin:", error);
     return res.status(500).json({
       success: false,
       message: "Error interno del servidor",
@@ -2291,13 +2309,14 @@ export async function consultarIA(req, res) {
     });
 
   } catch (error) {
-    console.log(error);
+
     return res.status(500).json({
       success: false,
       error: "Error al conectar con el servicio de IA. Por favor, intenta nuevamente."
     });
   }
 }
+
 export async function consultarIAProyecto(req, res) {
   try {
     const { mensaje, sessionId } = sanitizeObject(req.body);
@@ -2463,7 +2482,7 @@ export async function consultarIAProyecto(req, res) {
 
   } catch (error) {
 
-    console.log(error);
+
 
     return res.status(500).json({
       success: false,
@@ -2585,7 +2604,7 @@ export async function obtenerOCrearSessionActual(req, res) {
 
   } catch (error) {
 
-    console.log("Error al obtener o crear sesión actual:", error);
+
 
     return res.status(500).json({
       success: false,
@@ -2596,131 +2615,510 @@ export async function obtenerOCrearSessionActual(req, res) {
 
 export async function guardarExplicacionesTarde(req, res) {
   try {
-    const { queHizo, actividadId, pendienteId } = sanitizeObject(req.body);
+    const { queHizo, actividadId, pendienteId, sessionId } = sanitizeObject(req.body);
+    console.log('📥 Datos recibidos:', { queHizo, actividadId, pendienteId, sessionId });
 
+    const { token } = req.cookies;
 
-
-    if (!queHizo || !actividadId || !pendienteId) {
-      return res.status(400).json({
+    if (!token) {
+      return res.status(401).json({
         success: false,
-        message: "Parámetros inválidos",
+        error: "No autenticado"
       });
     }
 
-    const actividadDoc = await ActividadesSchema.findOne({
+    const decoded = jwt.verify(token, TOKEN_SECRET);
+    const emailUsuario = decoded.email;
+
+    console.log('👤 Usuario autenticado por JWT:', emailUsuario); // ✅ LOG ÚTIL
+
+    // Validaciones
+    if (!queHizo || !actividadId || !pendienteId) {
+      return res.status(400).json({
+        success: false,
+        message: "Parámetros inválidos: queHizo, actividadId y pendienteId son requeridos",
+      });
+    }
+
+    if (queHizo.trim().length < 5) {
+      return res.status(400).json({
+        success: false,
+        message: "La explicación es demasiado corta. Por favor proporciona más detalles.",
+      });
+    }
+
+    // ✅ FIX PRINCIPAL: Filtrar por emailUsuario del JWT para evitar docs con emailUsuario undefined
+    const actividadDocs = await ActividadesSchema.find({
+      emailUsuario: emailUsuario,                          // ✅ SIEMPRE filtrar por usuario autenticado
       "actividades.actividadId": actividadId,
       "actividades.pendientes.pendienteId": pendienteId,
     });
 
-    if (!actividadDoc) {
-      return res.status(404).json({
-        success: false,
-        message: "Actividad no encontrada",
+    // ✅ Fallback: si no encontró con email (docs legacy sin emailUsuario), buscar sin él
+    let docsParaActualizar = actividadDocs;
+    if (!actividadDocs || actividadDocs.length === 0) {
+      console.warn('⚠️ No se encontró doc con emailUsuario, intentando búsqueda sin filtro de email...');
+      const docsSinFiltro = await ActividadesSchema.find({
+        "actividades.actividadId": actividadId,
+        "actividades.pendientes.pendienteId": pendienteId,
       });
+
+      if (!docsSinFiltro || docsSinFiltro.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: "Actividad no encontrada",
+        });
+      }
+
+      docsParaActualizar = docsSinFiltro;
+      console.warn(`⚠️ Usando ${docsParaActualizar.length} docs SIN filtro email (docs legacy)`);
     }
 
-    const actividad = actividadDoc.actividades.find(
+    console.log(`📋 Encontrados ${docsParaActualizar.length} documentos con esta actividad`);
+
+    // Obtener el primer documento para hacer el análisis de IA (solo una vez)
+    const primerDoc = docsParaActualizar[0];
+    const primeraActividad = primerDoc.actividades.find(
       (a) => a.actividadId === actividadId
     );
-
-    if (!actividad) {
-      return res.status(404).json({
-        success: false,
-        message: "Actividad no encontrada",
-      });
-    }
-
-    const pendiente = actividad.pendientes.find(
+    const primerPendiente = primeraActividad?.pendientes.find(
       (p) => p.pendienteId === pendienteId
     );
 
-    if (!pendiente) {
+    if (!primerPendiente) {
       return res.status(404).json({
         success: false,
         message: "Pendiente no encontrado",
       });
     }
 
+    // ==================== ANÁLISIS CON IA (UNA SOLA VEZ) ====================
+    const prompt = `Eres un asistente experto en análisis de reportes laborales. Analiza el siguiente reporte de trabajo y determina si la tarea se completó exitosamente.
 
-    const prompt = `Analiza el siguiente reporte de trabajo y determina si la tarea se puede considerar completada.
-
-TAREA: "${pendiente.nombre}"
-DESCRIPCIÓN: "${pendiente.descripcion}"
+═══════════════════════════════════════════════════════════════════════════════
+INFORMACIÓN DE LA TAREA
+═══════════════════════════════════════════════════════════════════════════════
+NOMBRE: "${primerPendiente.nombre}"
+DESCRIPCIÓN ORIGINAL: "${primerPendiente.descripcion || 'Sin descripción previa'}"
 REPORTE DEL USUARIO: "${queHizo}"
 
-REGLAS DE EVALUACIÓN:
-1. Sé FLEXIBLE: Si el usuario menciona haber trabajado en la tarea, haber avanzado significativamente o describe detalles técnicos, márcala como COMPLETADA (true).
-2. Solo marca como NO COMPLETADA (false) si el usuario dice explícitamente que no hizo nada, que está totalmente pendiente o que tuvo un bloqueo que le impidió empezar.
-3. Ignora muletillas o lenguaje coloquial; enfócate en la intención de haber realizado el trabajo.
-4. Debes responder OBLIGATORIAMENTE con un objeto JSON NO VACÍO.
-5. NO respondas texto.
-6. NO respondas explicaciones fuera del JSON.
-7. NO respondas {}.
+═══════════════════════════════════════════════════════════════════════════════
+REGLAS DE EVALUACIÓN
+═══════════════════════════════════════════════════════════════════════════════
 
-RESPONDE ÚNICAMENTE EN ESTE FORMATO JSON:
+1️⃣ CRITERIOS PARA MARCAR COMO COMPLETADA (true)
+   ✅ El usuario describe trabajo CONCRETO y FINALIZADO
+   ✅ Menciona resultados verificables o funcionales
+   ✅ Usa verbos en PASADO que indican finalización:
+      • "Terminé", "Completé", "Finalicé", "Implementé"
+      • "Corregí", "Arreglé", "Optimicé", "Creé"
+      • "Ya quedó", "Está listo", "Funciona correctamente"
+   ✅ Describe pruebas exitosas:
+      • "Lo probé y funciona"
+      • "Validé que está funcionando"
+      • "Ya está en producción"
+   ✅ Menciona entregables tangibles:
+      • "Subí el código", "Hice el deploy"
+      • "Envié el reporte", "Documenté el proceso"
+
+2️⃣ CRITERIOS PARA MARCAR COMO NO COMPLETADA (false)
+   ❌ El usuario indica explícitamente que NO terminó
+   ❌ Menciona BLOQUEOS o PROBLEMAS sin resolver
+   ❌ Usa verbos que indican intento sin éxito:
+      • "Intenté pero...", "Traté de..."
+      • "Empecé pero...", "Iba a hacer pero..."
+   ❌ Menciona PENDIENTES explícitos:
+      • "Falta", "Aún no", "Todavía no"
+      • "Quedó pendiente", "No lo logré"
+   ❌ Describe bloqueos o dependencias:
+      • "Esperando aprobación/información/acceso"
+      • "No tengo permisos/credenciales"
+      • "Bloqueado por otra tarea/persona"
+   ❌ Avance parcial SIN entregable funcional:
+      • "Hice la mitad", "Avancé un 50%"
+      • "Solo preparé el ambiente"
+
+3️⃣ CASOS ESPECIALES Y GRISES
+   🔸 Investigación/Análisis SIN código:
+      • Si describe hallazgos concretos → COMPLETADA
+      • Si solo dice "investigué un poco" → NO COMPLETADA
+
+   🔸 Trabajo técnico detallado:
+      • Si menciona cambios específicos en archivos/código → COMPLETADA
+      • Si describe arquitectura/diseño implementado → COMPLETADA
+      • Si solo menciona "trabajé en..." sin detalles → NO COMPLETADA
+
+   🔸 Correcciones/Bugfixes:
+      • Si confirma que el bug está resuelto → COMPLETADA
+      • Si solo identificó el problema → NO COMPLETADA
+
+   🔸 Meetings/Reuniones:
+      • Si tomó decisiones/acuerdos concretos → COMPLETADA
+      • Si solo asistió sin conclusiones → NO COMPLETADA
+
+   🔸 ⚠️ IMPORTANTE - Lenguaje coloquial/informal (voz a texto):
+      • "lo que hicimos fue verificar X y documentar Y" → EVALÚA EL CONTENIDO, no el estilo
+      • Si el resultado final fue logrado (aunque lo digan informalmente) → COMPLETADA
+      • Muletillas como "básicamente", "o sea", "este" NO penalizan si el contenido es claro
+      • "empezamos a documentar en Word" con resultado guardado → COMPLETADA
+
+4️⃣ EXTRACCIÓN DEL MOTIVO (si NO está completada)
+   📌 IMPORTANTE: Identifica la razón ESPECÍFICA del no-completado
+
+   Categorías de motivos:
+   • Bloqueo técnico: "No tenía acceso al servidor X"
+   • Bloqueo externo: "Esperando aprobación de cliente/gerencia"
+   • Falta información: "Falta especificación del diseño"
+   • Dependencia: "Bloqueado por tarea Y pendiente"
+   • Problema técnico: "Error en API externa sin resolver"
+   • Falta recursos: "No tengo permisos/credenciales necesarios"
+   • Priorización: "Se priorizó otra tarea más urgente"
+   • Default: "No especificó el motivo" (solo si no hay ninguna pista)
+
+   FORMATO: Máximo 100 caracteres, frase clara y específica
+
+5️⃣ EVALUACIÓN DE CALIDAD (0-100)
+   90-100 pts: Explicación detallada con:
+      • Verbos de acción específicos
+      • Resultados medibles/verificables
+      • Menciona archivos/componentes/funcionalidades concretas
+      • Describe el impacto o beneficio logrado
+
+   70-89 pts: Explicación clara con:
+      • Describe qué se hizo
+      • Menciona algunos detalles técnicos
+      • Falta profundidad o contexto completo
+
+   50-69 pts: Explicación vaga con:
+      • Descripción general sin detalles
+      • Usa muletillas ("este", "pues", "entonces")
+      • No menciona resultados concretos
+
+   0-49 pts: Explicación muy pobre:
+      • Solo dice "lo hice" sin explicar
+      • Texto muy corto (<20 caracteres)
+      • No aporta información útil
+
+6️⃣ DETECCIÓN DE RESPUESTAS INVÁLIDAS
+   ⚠️ Si el reporte contiene SOLO estas frases, márcalo como NO COMPLETADA con baja calidad:
+   • "ok", "sí", "no", "bien", "gracias"
+   • "listo", "perfecto", "entendido"
+   • Menos de 3 palabras
+   • Solo muletillas sin contenido
+
+═══════════════════════════════════════════════════════════════════════════════
+INSTRUCCIONES DE RESPUESTA
+═══════════════════════════════════════════════════════════════════════════════
+
+Analiza el reporte cuidadosamente y responde ÚNICAMENTE en formato JSON:
+
 {
-  "completada": true o false,
-  "confianza": 0.0 a 1.0,
-  "razon": "Breve explicación",
-  "evidencias": ["frase 1", "frase 2"]
-}`;
+  "completada": boolean,
+  "confianza": number (0.0 a 1.0),
+  "razon": "Explicación breve de tu evaluación (máx 200 caracteres)",
+  "evidencias": ["frase clave 1", "frase clave 2", "frase clave 3"],
+  "calidadExplicacion": number (0 a 100),
+  "feedbackMejora": "Sugerencia constructiva para mejorar el reporte (o vacío si está excelente)",
+  "motivoNoCompletado": "Motivo específico si false, o null si true"
+}
+
+═══════════════════════════════════════════════════════════════════════════════
+EJEMPLOS DE ANÁLISIS
+═══════════════════════════════════════════════════════════════════════════════
+
+EJEMPLO 1 - COMPLETADA:
+Reporte: "Implementé la validación de formularios en el componente LoginForm.tsx. Agregué Zod para el schema y ahora valida email, contraseña (mínimo 8 caracteres) y muestra errores en tiempo real. Lo probé y funciona correctamente."
+
+Respuesta:
+{
+  "completada": true,
+  "confianza": 0.95,
+  "razon": "Describe implementación completa con detalles técnicos específicos y validación exitosa",
+  "evidencias": ["Implementé la validación", "Agregué Zod", "Lo probé y funciona correctamente"],
+  "calidadExplicacion": 92,
+  "feedbackMejora": "",
+  "motivoNoCompletado": null
+}
+
+EJEMPLO 2 - NO COMPLETADA:
+Reporte: "Intenté conectar con la API de pagos pero no tengo las credenciales de producción. Quedó pendiente hasta que el cliente las proporcione."
+
+Respuesta:
+{
+  "completada": false,
+  "confianza": 0.9,
+  "razon": "Bloqueado por falta de credenciales externas",
+  "evidencias": ["no tengo las credenciales", "Quedó pendiente"],
+  "calidadExplicacion": 75,
+  "feedbackMejora": "Menciona qué pasos alternativos tomaste mientras esperas las credenciales",
+  "motivoNoCompletado": "Falta credenciales de producción del cliente"
+}
+
+EJEMPLO 3 - REPORTE INFORMAL/VOZ (COMPLETADA):
+Reporte: "Bueno, lo que hicimos básicamente fue, pues, ya sabes, verificamos la información disponible, igual documentamos lo que viene siendo la parte del proyecto y eso, empezamos a documentar en un archivo en Word."
+
+Respuesta:
+{
+  "completada": true,
+  "confianza": 0.78,
+  "razon": "Describe verificación de información y documentación en Word completadas, aunque con lenguaje informal",
+  "evidencias": ["verificamos la información disponible", "documentamos", "documentar en un archivo en Word"],
+  "calidadExplicacion": 55,
+  "feedbackMejora": "Especifica qué información verificaste y qué contenido documentaste en Word",
+  "motivoNoCompletado": null
+}
+
+EJEMPLO 4 - RESPUESTA INVÁLIDA:
+Reporte: "Gracias."
+
+Respuesta:
+{
+  "completada": false,
+  "confianza": 0.95,
+  "razon": "Respuesta inválida: no describe trabajo realizado",
+  "evidencias": [],
+  "calidadExplicacion": 5,
+  "feedbackMejora": "Por favor describe específicamente qué trabajo realizaste en esta tarea",
+  "motivoNoCompletado": "No proporcionó explicación válida"
+}
+
+═══════════════════════════════════════════════════════════════════════════════
+
+AHORA ANALIZA EL REPORTE PROPORCIONADO Y RESPONDE EN JSON:`;
 
     const aiResult = await smartAICall(prompt);
 
     // Limpiar respuesta
     let textoLimpio = aiResult.text.trim();
-
-    // Remover markdown si existe
     if (textoLimpio.includes('```')) {
       textoLimpio = textoLimpio.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
     }
 
-    const respuestaIA = parseAIJSONSafe(textoLimpio);
+    // Intentar parsear
+    let validacion = {
+      completada: true,
+      confianza: 0.8,
+      razon: "Análisis por defecto",
+      evidencias: [],
+      calidadExplicacion: 70,
+      feedbackMejora: "",
+      motivoNoCompletado: null
+    };
 
-    let validacion = {};
-    if (respuestaIA) {
-      try {
-        validacion = JSON.parse(respuestaIA);
-      } catch {
-        validacion = {};
+    try {
+      const respuestaIA = parseAIJSONSafe(textoLimpio);
+      if (respuestaIA) {
+        if (typeof respuestaIA === 'object') {
+          validacion = { ...validacion, ...respuestaIA };
+        } else if (typeof respuestaIA === 'string') {
+          validacion = { ...validacion, ...JSON.parse(respuestaIA) };
+        }
       }
+    } catch (parseError) {
+      console.warn('⚠️ Error parseando respuesta IA, usando valores por defecto');
     }
-
-
-
 
     const estaTerminada = typeof validacion.completada === 'boolean'
       ? validacion.completada
       : true;
 
-    pendiente.queHizo = queHizo;
-    pendiente.terminada = estaTerminada;
+    const esValidadaPorIA = validacion.confianza >= 0.7 && validacion.calidadExplicacion >= 60;
 
-    if (estaTerminada) {
-      pendiente.fechaFinTerminada = new Date();
+    console.log('🤖 Resultado IA:', {            // ✅ LOG ÚTIL
+      completada: estaTerminada,
+      confianza: validacion.confianza,
+      calidad: validacion.calidadExplicacion,
+      razon: validacion.razon,
+    });
+
+    // ==================== GUARDAR EN TODOS LOS DOCUMENTOS ====================
+    const fechaActual = new Date();
+    const resultadosGuardado = [];
+
+    for (const actividadDoc of docsParaActualizar) {
+      // ✅ FIX: Usar emailUsuario del JWT si el doc no tiene el campo
+      const emailDocumento = actividadDoc.emailUsuario || emailUsuario;
+      console.log(`💾 Guardando en documento de: ${emailDocumento}`);
+
+      try {
+        const actividad = actividadDoc.actividades.find(a => a.actividadId === actividadId);
+        const pendiente = actividad?.pendientes.find(p => p.pendienteId === pendienteId);
+
+        const historialEntry = (pendiente?.explicacionVoz && pendiente.explicacionVoz.texto) ? {
+          texto: pendiente.explicacionVoz.texto,
+          emailUsuario: pendiente.explicacionVoz.emailUsuario,
+          fecha: pendiente.explicacionVoz.fechaRegistro || new Date(),
+          validadaPorIA: pendiente.explicacionVoz.validadaPorIA || false,
+          razonIA: pendiente.explicacionVoz.razonIA || "",
+          sessionId: pendiente.explicacionVoz.metadata?.sessionId || "",
+          resultado: {
+            esValida: esValidadaPorIA,
+            puntuacion: validacion.calidadExplicacion || 0,
+            feedback: validacion.feedbackMejora || ""
+          }
+        } : null;
+
+        const otrosPendientes = actividad?.pendientes.filter(p => p.pendienteId !== pendienteId) || [];
+        const todosCompletados = otrosPendientes.every(p => p.terminada) && estaTerminada;
+
+        const updateOperations = {
+          $set: {
+            "actividades.$[act].pendientes.$[pend].explicacionVoz": {
+              texto: queHizo.trim(),
+              emailUsuario: emailUsuario,
+              fechaRegistro: fechaActual,
+              validadaPorIA: esValidadaPorIA,
+              razonIA: validacion.razon || "",
+              metadata: {
+                sessionId: sessionId || `session-${Date.now()}`,
+                duracionMin: pendiente?.duracionMin || 0,
+                prioridad: pendiente?.prioridad || "MEDIA",
+                fuente: "voz-a-texto",
+                version: "2.0",
+                dispositivo: req.headers['user-agent'] || "desconocido",
+                lenguaje: "es-MX"
+              }
+            },
+            "actividades.$[act].pendientes.$[pend].queHizo": queHizo.trim(),
+            "actividades.$[act].pendientes.$[pend].terminada": estaTerminada,
+            "actividades.$[act].pendientes.$[pend].revisadoPorVoz": true,
+            "actividades.$[act].pendientes.$[pend].fechaRevisionVoz": fechaActual,
+            "actividades.$[act].pendientes.$[pend].ultimaActualizacion": fechaActual,
+            "actividades.$[act].pendientes.$[pend].actualizadoPor": emailUsuario,
+            "actividades.$[act].pendientes.$[pend].ultimaExplicacionFecha": fechaActual,
+            "actividades.$[act].pendientes.$[pend].motivoNoCompletado":
+              !estaTerminada && validacion.motivoNoCompletado
+                ? validacion.motivoNoCompletado.trim()
+                : null,
+            "actividades.$[act].ultimaActualizacion": fechaActual,
+            "actividades.$[act].actualizadoPor": emailUsuario,
+            "actividades.$[act].fechaRevisionVoz": fechaActual,
+            "ultimaSincronizacion": fechaActual,
+            "fechaUltimaExplicacion": fechaActual,
+          },
+          $inc: {
+            "actividades.$[act].pendientes.$[pend].vecesExplicado": 1,
+            "actividades.$[act].pendientes.$[pend].intentosValidacion": 1,
+            "actividades.$[act].pendientes.$[pend].intentosExitosos": esValidadaPorIA ? 1 : 0,
+            "actividades.$[act].totalExplicacionesVoz": 1,
+            "totalExplicacionesVoz": 1,
+            "totalExplicacionesValidadas": esValidadaPorIA ? 1 : 0,
+            "totalExplicacionesRechazadas": esValidadaPorIA ? 0 : 1,
+          }
+        };
+
+        if (estaTerminada) {
+          updateOperations.$set["actividades.$[act].pendientes.$[pend].fechaFinTerminada"] = fechaActual;
+          updateOperations.$set["actividades.$[act].pendientes.$[pend].confirmada"] = true;
+        }
+
+        if (todosCompletados) {
+          updateOperations.$set["actividades.$[act].completadaPorVoz"] = true;
+        }
+
+        if (!actividadDoc.fechaPrimeraExplicacion) {
+          updateOperations.$set["fechaPrimeraExplicacion"] = fechaActual;
+        }
+
+        if (historialEntry) {
+          updateOperations.$push = {
+            "actividades.$[act].pendientes.$[pend].historialExplicaciones": historialEntry
+          };
+        }
+
+        const resultado = await ActividadesSchema.findOneAndUpdate(
+          {
+            // ✅ FIX: Usar _id del documento para garantizar que actualiza el correcto
+            _id: actividadDoc._id,
+            "actividades.actividadId": actividadId,
+            "actividades.pendientes.pendienteId": pendienteId
+          },
+          updateOperations,
+          {
+            arrayFilters: [
+              { "act.actividadId": actividadId },
+              { "pend.pendienteId": pendienteId }
+            ],
+            new: true,
+            runValidators: false
+          }
+        );
+
+        if (!resultado) {
+          console.warn(`⚠️ No se pudo actualizar documento ${actividadDoc._id}`);
+          continue;
+        }
+
+        const actividadVerificada = resultado.actividades.find(a => a.actividadId === actividadId);
+        const pendienteVerificado = actividadVerificada?.pendientes.find(p => p.pendienteId === pendienteId);
+
+        // ✅ FIX LOG: Mostrar datos reales en vez de 'OK'/'MISSING'
+        console.log('🔍 Verificación después de guardar:', {
+          emailUsuario: resultado.emailUsuario || emailUsuario,
+          terminada: pendienteVerificado?.terminada,
+          motivoNoCompletado: pendienteVerificado?.motivoNoCompletado,
+          queHizoGuardado: pendienteVerificado?.queHizo
+            ? `"${pendienteVerificado.queHizo.substring(0, 60)}..."`
+            : 'VACÍO ⚠️',
+        });
+
+        resultadosGuardado.push({
+          emailUsuario: resultado.emailUsuario || emailUsuario,
+          nombreUsuario: resultado.nombreUsuario,
+          guardadoExitoso: true,
+          verificacion: {
+            terminadaCorrecta: pendienteVerificado?.terminada === estaTerminada,
+            motivoGuardado: !estaTerminada ? !!pendienteVerificado?.motivoNoCompletado : true,
+            queHizoGuardado: !!pendienteVerificado?.queHizo,
+          }
+        });
+
+        console.log(`✅ Guardado exitosamente en documento de: ${resultado.emailUsuario || emailUsuario}`);
+
+      } catch (saveError) {
+        console.error(`❌ Error guardando en documento ${actividadDoc._id}:`, saveError);
+        resultadosGuardado.push({
+          emailUsuario: actividadDoc.emailUsuario || emailUsuario,
+          nombreUsuario: actividadDoc.nombreUsuario,
+          guardadoExitoso: false,
+          error: saveError.message
+        });
+      }
     }
 
-    actividad.ultimaActualizacion = new Date();
-    await actividadDoc.save();
-
+    // ==================== RESPUESTA ====================
     const respuestaFinal = {
       success: true,
       completada: estaTerminada,
-      confianza: respuestaIA.confianza || 1.0,
-      razon: respuestaIA.razon || "",
-      evidencias: [],
-      message: respuestaIA.message ? "Tarea marcada como completada" : "Tarea marcada como no completada",
+      confianza: validacion.confianza || 0.8,
+      razon: validacion.razon || "Tarea analizada",
+      evidencias: validacion.evidencias || [],
+      calidadExplicacion: validacion.calidadExplicacion || 70,
+      feedbackMejora: validacion.feedbackMejora || "",
+      validadaPorIA: esValidadaPorIA,
+      motivoNoCompletado: !estaTerminada ? (validacion.motivoNoCompletado || null) : null,
+      message: estaTerminada
+        ? "✅ Tarea marcada como completada"
+        : `⏳ Tarea marcada como no completada${validacion.motivoNoCompletado ? ': ' + validacion.motivoNoCompletado : ''}`,
+      guardadoEn: resultadosGuardado,
+      totalUsuariosActualizados: resultadosGuardado.filter(r => r.guardadoExitoso).length,
+      metadata: {
+        sessionId: sessionId || `session-${Date.now()}`,
+        fechaRegistro: fechaActual,
+        emailUsuario: emailUsuario,
+        actividadCompletada: resultadosGuardado.length > 0
+      }
     };
-
 
     return res.json(respuestaFinal);
 
   } catch (error) {
-
+    console.error('❌ Error en guardarExplicacionesTarde:', error);
     return res.status(500).json({
       success: false,
       message: "Error interno del servidor",
       error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 }
@@ -2754,6 +3152,159 @@ export async function eliminarConversacion(req, res) {
       success: false,
       message: "Error al eliminar la conversación",
       error: error.message,
+    });
+  }
+}
+
+export async function modificarMotivoNoCompletado(req, res) {
+  try {
+    const { pendienteId, actividadId, motivo } = sanitizeObject(req.body);
+
+    console.log('📥 Guardando motivo:', { pendienteId, actividadId, motivo });
+
+    // Obtener email del usuario autenticado
+    const { token } = req.cookies;
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        error: "No autenticado"
+      });
+    }
+
+    const decoded = jwt.verify(token, TOKEN_SECRET);
+    const emailUsuario = decoded.email;
+
+    // Validaciones
+    if (!pendienteId || !actividadId || !motivo) {
+      console.log('❌ Parámetros inválidos');
+      return res.status(400).json({
+        success: false,
+        message: "Parámetros inválidos: pendienteId, actividadId y motivo son requeridos",
+      });
+    }
+
+    if (motivo.trim().length < 3) {
+      console.log('❌ Motivo demasiado corto');
+      return res.status(400).json({
+        success: false,
+        message: "El motivo es demasiado corto. Por favor proporciona más detalles.",
+      });
+    }
+
+    // 🔥 BUSCAR TODOS LOS DOCUMENTOS QUE CONTIENEN ESTA ACTIVIDAD/PENDIENTE
+    // Esto encontrará el documento de TODOS los usuarios que tienen esta actividad compartida
+    const actividadDocs = await ActividadesSchema.find({
+      "actividades.actividadId": actividadId,
+      "actividades.pendientes.pendienteId": pendienteId,
+    });
+
+    if (!actividadDocs || actividadDocs.length === 0) {
+      console.log('❌ Actividad no encontrada');
+      return res.status(404).json({
+        success: false,
+        message: "Actividad o pendiente no encontrado",
+      });
+    }
+
+    console.log(`📋 Encontrados ${actividadDocs.length} documentos con esta actividad`);
+
+    // ==================== GUARDAR EN TODOS LOS DOCUMENTOS ====================
+    const fechaActual = new Date();
+    const resultadosGuardado = [];
+
+    // 🔥 ITERAR SOBRE TODOS LOS DOCUMENTOS ENCONTRADOS
+    for (const actividadDoc of actividadDocs) {
+      console.log(`💾 Guardando motivo en documento de: ${actividadDoc.emailUsuario}`);
+
+      // Encontrar actividad y pendiente en ESTE documento específico
+      const actividad = actividadDoc.actividades.find(
+        (a) => a.actividadId === actividadId
+      );
+
+      if (!actividad) {
+        console.warn(`⚠️ Actividad no encontrada en documento de ${actividadDoc.emailUsuario}`);
+        continue;
+      }
+
+      const pendiente = actividad.pendientes.find(
+        (p) => p.pendienteId === pendienteId
+      );
+
+      if (!pendiente) {
+        console.warn(`⚠️ Pendiente no encontrado en documento de ${actividadDoc.emailUsuario}`);
+        continue;
+      }
+
+      // ✅ Actualizar el motivo en el pendiente
+      pendiente.motivoNoCompletado = motivo.trim();
+      pendiente.ultimaActualizacion = fechaActual;
+      pendiente.actualizadoPor = emailUsuario; // El que REGISTRÓ el motivo
+      pendiente.terminada = false; // Asegurar que esté marcada como NO terminada
+      pendiente.confirmada = false;
+
+      // Actualizar campos de la actividad
+      actividad.ultimaActualizacion = fechaActual;
+      actividad.actualizadoPor = emailUsuario;
+
+      // Actualizar campos globales del documento
+      actividadDoc.ultimaSincronizacion = fechaActual;
+
+      // Guardar el documento
+      await actividadDoc.save();
+
+      resultadosGuardado.push({
+        emailUsuario: actividadDoc.emailUsuario,
+        nombreUsuario: actividadDoc.nombreUsuario,
+        guardadoExitoso: true
+      });
+
+      console.log(`✅ Motivo guardado exitosamente en documento de: ${actividadDoc.emailUsuario}`);
+    }
+
+    // 📝 OPCIONAL: Guardar también en colección histórica de motivos
+    try {
+      await MotivoNoCompletado.create({
+        pendienteId,
+        actividadId,
+        motivo: motivo.trim(),
+        email: emailUsuario,
+        fecha: fechaActual,
+        totalUsuariosAfectados: resultadosGuardado.length,
+      });
+      console.log('📊 Guardado también en histórico de motivos');
+    } catch (historicoError) {
+      console.warn('⚠️ Error guardando en histórico de motivos:', historicoError.message);
+      // No fallar si esto falla, es solo histórico
+    }
+
+    // ==================== RESPUESTA ====================
+    const respuestaFinal = {
+      success: true,
+      message: "Motivo guardado exitosamente",
+      motivoGuardado: motivo.trim(),
+
+      // 🔥 INFORMACIÓN DE GUARDADO MÚLTIPLE
+      guardadoEn: resultadosGuardado,
+      totalUsuariosActualizados: resultadosGuardado.length,
+
+      // Metadata
+      metadata: {
+        fechaRegistro: fechaActual,
+        emailUsuario: emailUsuario,
+        pendienteId,
+        actividadId,
+      }
+    };
+
+    return res.json(respuestaFinal);
+
+  } catch (error) {
+    console.error('❌ Error en guardarMotivo:', error);
+    return res.status(500).json({
+      success: false,
+      message: "Error al guardar el motivo",
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 }

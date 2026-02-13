@@ -1,5 +1,7 @@
 import ActividadesSchema from "../models/actividades.model.js";
 import ReportePendiente from "../models/reporte.model.js";
+import jwt from "jsonwebtoken";
+import { TOKEN_SECRET } from "../config.js"
 
 // 1. Función para obtener TODOS los reportes (todos los usuarios)
 export async function obtenerTodosReportes(req, res) {
@@ -642,9 +644,9 @@ async function obtenerEstadisticasPorEstado(filtroBase) {
         { $unwind: "$actividades.pendientes" },
         {
             $match: {
-                "actividades.pendientes.descripcion": { 
-                    $exists: true, 
-                    $ne: "" 
+                "actividades.pendientes.descripcion": {
+                    $exists: true,
+                    $ne: ""
                 }
             }
         },
@@ -656,7 +658,7 @@ async function obtenerEstadisticasPorEstado(filtroBase) {
         },
         { $sort: { count: -1 } }
     ];
-    
+
     return await ActividadesSchema.aggregate(pipeline);
 }
 
@@ -667,9 +669,9 @@ async function obtenerEstadisticasPorPrioridad(filtroBase) {
         { $unwind: "$actividades.pendientes" },
         {
             $match: {
-                "actividades.pendientes.descripcion": { 
-                    $exists: true, 
-                    $ne: "" 
+                "actividades.pendientes.descripcion": {
+                    $exists: true,
+                    $ne: ""
                 }
             }
         },
@@ -681,55 +683,83 @@ async function obtenerEstadisticasPorPrioridad(filtroBase) {
         },
         { $sort: { count: -1 } }
     ];
-    
+
     return await ActividadesSchema.aggregate(pipeline);
 }
 
 export async function obtenerTareasReportadas(req, res) {
     try {
-        const { email, actividadId, limit = 50 } = req.query;
+        const { actividadId, limit = 50 } = req.query;
+
+        const { token } = req.cookies;
+        const decoded = jwt.verify(token, TOKEN_SECRET);
+        const userId = decoded.id;
+        const email = decoded.email;
 
         if (!email) {
             return res.status(400).json({ success: false, message: "Email requerido" });
         }
 
         const todosLosDocumentos = await ActividadesSchema.find({}).lean();
-        
+
         const tareasDelUsuario = [];
         const tareasDeColaboradores = [];
-        
+
+        // ✅ DEFINE LISTA DE EMAILS INVÁLIDOS
+        const emailsInvalidos = ['desconocido', '', null, undefined];
+
         for (const documento of todosLosDocumentos) {
             if (documento.actividades && Array.isArray(documento.actividades)) {
                 for (const actividad of documento.actividades) {
                     if (actividadId && actividad.actividadId !== actividadId) {
                         continue;
                     }
-                    
+
                     if (actividad.pendientes && Array.isArray(actividad.pendientes)) {
                         for (const pendiente of actividad.pendientes) {
                             let esDelUsuario = false;
                             let donde = '';
                             let texto = '';
-                            
-                            if (pendiente.explicacionVoz && pendiente.explicacionVoz.emailUsuario === email) {
+
+                            // ✅ PRIORIDAD 1: explicacionVoz.texto (con metadata completa)
+                            // 🔥 IMPORTANTE: NO considerar si el texto es igual a la descripción
+                            // (indica que se copió automáticamente, no es una explicación real)
+                            if (pendiente.explicacionVoz &&
+                                pendiente.explicacionVoz.emailUsuario === email &&
+                                pendiente.explicacionVoz.texto &&
+                                pendiente.explicacionVoz.texto.trim() !== '' &&
+                                pendiente.explicacionVoz.texto.trim() !== (pendiente.descripcion || '').trim()) {
                                 esDelUsuario = true;
                                 donde = 'explicacionVoz';
-                                texto = pendiente.explicacionVoz.texto || '';
+                                texto = pendiente.explicacionVoz.texto;
                             }
-                            else if (pendiente.actualizadoPor === email) {
+                            // ✅ PRIORIDAD 2: queHizo (campo simple, pero válido)  
+                            else if (pendiente.queHizo &&
+                                pendiente.queHizo.trim() !== '' &&
+                                pendiente.queHizo.trim() !== (pendiente.descripcion || '').trim() &&
+                                pendiente.actualizadoPor === email) {
                                 esDelUsuario = true;
-                                donde = 'actualizadoPor';
-                                texto = pendiente.descripcion || '';
+                                donde = 'queHizo';
+                                texto = pendiente.queHizo;
                             }
+                            // ✅ PRIORIDAD 3: historialExplicaciones
                             else if (pendiente.historialExplicaciones && Array.isArray(pendiente.historialExplicaciones)) {
-                                const historialConEmail = pendiente.historialExplicaciones.find(h => h.emailUsuario === email);
+                                const historialConEmail = pendiente.historialExplicaciones.find(
+                                    h => h.emailUsuario === email &&
+                                        h.texto &&
+                                        h.texto.trim() !== '' &&
+                                        h.texto.trim() !== (pendiente.descripcion || '').trim()
+                                );
                                 if (historialConEmail) {
                                     esDelUsuario = true;
                                     donde = 'historialExplicaciones';
-                                    texto = historialConEmail.texto || '';
+                                    texto = historialConEmail.texto;
                                 }
                             }
-                            
+
+                            // ❌ NO USAR: descripcion (es "qué hacer", NO "qué hiciste")
+
+                            // ✅ SOLO AGREGAR SI TIENE TEXTO DE EXPLICACIÓN REAL
                             if (esDelUsuario && texto && texto.trim() !== '') {
                                 tareasDelUsuario.push({
                                     actividad: actividad.titulo || 'Sin título',
@@ -747,12 +777,28 @@ export async function obtenerTareasReportadas(req, res) {
                                     }
                                 });
                             }
-                            
-                            if (pendiente.explicacionVoz && pendiente.explicacionVoz.emailUsuario) {
+
+                            // ✅ VALIDAR REPORTES DE OTROS COLABORADORES
+
+                            // CASO 1: explicacionVoz de otro usuario
+                            if (pendiente.explicacionVoz &&
+                                pendiente.explicacionVoz.emailUsuario) {
                                 const otroEmail = pendiente.explicacionVoz.emailUsuario;
                                 const otroTexto = pendiente.explicacionVoz.texto || '';
-                                
-                                if (otroTexto && otroTexto.trim() !== '' && otroEmail !== email) {
+
+                                // ⭐ RECHAZA EMAILS INVÁLIDOS
+                                if (emailsInvalidos.includes(otroEmail)) {
+                                    continue;
+                                }
+
+                                // 🔥 NO agregar si el texto es igual a descripcion
+                                const esIgualADescripcion = otroTexto.trim() === (pendiente.descripcion || '').trim();
+
+                                // ✅ SOLO AGREGAR SI TIENE TEXTO REAL Y ES OTRO USUARIO
+                                if (otroTexto &&
+                                    otroTexto.trim() !== '' &&
+                                    !esIgualADescripcion &&
+                                    otroEmail !== email) {
                                     tareasDeColaboradores.push({
                                         actividad: actividad.titulo || 'Sin título',
                                         tarea: pendiente.nombre || 'Sin nombre',
@@ -772,10 +818,50 @@ export async function obtenerTareasReportadas(req, res) {
                                     });
                                 }
                             }
-                            
+
+                            // CASO 2: queHizo de otro usuario
+                            else if (pendiente.queHizo &&
+                                pendiente.queHizo.trim() !== '' &&
+                                pendiente.queHizo.trim() !== (pendiente.descripcion || '').trim() &&
+                                pendiente.actualizadoPor &&
+                                pendiente.actualizadoPor !== email &&
+                                !emailsInvalidos.includes(pendiente.actualizadoPor)) {
+                                tareasDeColaboradores.push({
+                                    actividad: actividad.titulo || 'Sin título',
+                                    tarea: pendiente.nombre || 'Sin nombre',
+                                    texto: pendiente.queHizo,
+                                    encontradoEn: 'queHizo',
+                                    fecha: pendiente.ultimaActualizacion || new Date(),
+                                    pendienteId: pendiente.pendienteId,
+                                    actividadId: actividad.actividadId,
+                                    esMiReporte: false,
+                                    reportadoPor: {
+                                        email: pendiente.actualizadoPor,
+                                        nombre: pendiente.actualizadoPor.split('@')[0],
+                                        esYo: false
+                                    },
+                                    esReporteColaborativo: true,
+                                    colaborador: pendiente.actualizadoPor.split('@')[0]
+                                });
+                            }
+
+                            // ✅ VALIDAR EN HISTORIAL
                             if (pendiente.historialExplicaciones && Array.isArray(pendiente.historialExplicaciones)) {
                                 for (const historial of pendiente.historialExplicaciones) {
-                                    if (historial.emailUsuario && historial.emailUsuario !== email && historial.texto) {
+                                    // ⭐ RECHAZA EMAILS INVÁLIDOS
+                                    if (emailsInvalidos.includes(historial.emailUsuario)) {
+                                        continue;
+                                    }
+
+                                    // 🔥 NO agregar si el texto es igual a descripcion
+                                    const esIgualADescripcion = (historial.texto || '').trim() === (pendiente.descripcion || '').trim();
+
+                                    // ✅ SOLO AGREGAR SI TIENE TEXTO REAL Y ES OTRO USUARIO
+                                    if (historial.emailUsuario &&
+                                        historial.emailUsuario !== email &&
+                                        historial.texto &&
+                                        historial.texto.trim() !== '' &&
+                                        !esIgualADescripcion) {
                                         tareasDeColaboradores.push({
                                             actividad: actividad.titulo || 'Sin título',
                                             tarea: pendiente.nombre || 'Sin nombre',
@@ -805,8 +891,22 @@ export async function obtenerTareasReportadas(req, res) {
         let tareasFinales = [];
         tareasFinales.push(...tareasDelUsuario);
         tareasFinales.push(...tareasDeColaboradores);
-        
+
         tareasFinales.sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
+
+        // ✅ DEDUPLICAR POR pendienteId (mantener el más reciente)
+        // NOTA: Si una tarea tiene TANTO queHizo como explicacionVoz, 
+        // la lógica if-else anterior prioriza explicacionVoz porque:
+        // 1. Se evalúa primero
+        // 2. Tiene más metadata (email, fecha, validación IA)
+        // 3. Es la forma recomendada de reportar
+        const seen = new Set();
+        tareasFinales = tareasFinales.filter(t => {
+            if (seen.has(t.pendienteId)) return false;
+            seen.add(t.pendienteId);
+            return true;
+        });
+
         tareasFinales = tareasFinales.slice(0, limit);
 
         res.json({
@@ -824,24 +924,28 @@ export async function obtenerTareasReportadas(req, res) {
             metadata: {
                 tieneReportesPropios: tareasDelUsuario.length > 0,
                 tieneReportesColaborativos: tareasDeColaboradores.length > 0,
+                tareasUsuario: tareasDelUsuario.length,
+                tareasColaboradores: tareasDeColaboradores.length,
                 mensaje: tareasDelUsuario.length > 0 && tareasDeColaboradores.length > 0
                     ? 'Mostrando tus reportes y reportes de colaboradores en tus actividades'
                     : tareasDelUsuario.length > 0
-                    ? 'Mostrando tus reportes personales'
-                    : tareasDeColaboradores.length > 0
-                    ? 'Mostrando reportes de colaboradores en tus actividades'
-                    : 'No hay reportes disponibles'
+                        ? 'Mostrando tus reportes personales'
+                        : tareasDeColaboradores.length > 0
+                            ? 'Mostrando reportes de colaboradores en tus actividades'
+                            : 'No hay reportes disponibles'
             }
         });
 
     } catch (error) {
-        res.status(500).json({ 
-            success: false, 
+        console.error("Error al buscar tareas:", error);
+        res.status(500).json({
+            success: false,
             error: "Error al buscar tareas",
-            detalle: error.message 
+            detalle: error.message
         });
     }
 }
+
 export async function obtenerReportesPorActividad(req, res) {
     try {
         const { actividadId, tareaId, limit = 50 } = req.query;
@@ -850,37 +954,37 @@ export async function obtenerReportesPorActividad(req, res) {
 
         // 1. Buscar TODOS los documentos
         const todosLosDocumentos = await ActividadesSchema.find({}).lean();
-        
+
         // 2. Buscar reportes por actividad/tarea
         const reportesEncontrados = [];
         const actividadesUnicas = new Set();
         const colaboradoresUnicos = new Set();
-        
+
         for (const documento of todosLosDocumentos) {
             if (documento.actividades && Array.isArray(documento.actividades)) {
-                
+
                 for (const actividad of documento.actividades) {
                     // Filtrar por actividadId si se especifica
                     if (actividadId && actividad.actividadId !== actividadId) {
                         continue;
                     }
-                    
+
                     actividadesUnicas.add(actividad.titulo || 'Sin título');
-                    
+
                     if (actividad.pendientes && Array.isArray(actividad.pendientes)) {
-                        
+
                         for (const pendiente of actividad.pendientes) {
                             // Filtrar por tareaId si se especifica
                             if (tareaId && pendiente.pendienteId !== tareaId) {
                                 continue;
                             }
-                            
+
                             // BUSCAR REPORTES EN EXPLICACIONVOZ
                             if (pendiente.explicacionVoz && pendiente.explicacionVoz.texto) {
                                 const emailUsuario = pendiente.explicacionVoz.emailUsuario || "Desconocido";
                                 const nombreUsuario = emailUsuario.split('@')[0];
                                 colaboradoresUnicos.add(nombreUsuario);
-                                
+
                                 reportesEncontrados.push({
                                     tipo: 'explicacionVoz',
                                     actividadId: actividad.actividadId,
@@ -899,7 +1003,7 @@ export async function obtenerReportesPorActividad(req, res) {
                                     estado: pendiente.terminada ? 'COMPLETADA' : 'PENDIENTE'
                                 });
                             }
-                            
+
                             // BUSCAR REPORTES EN HISTORIAL EXPLICACIONES
                             if (pendiente.historialExplicaciones && Array.isArray(pendiente.historialExplicaciones)) {
                                 for (const historial of pendiente.historialExplicaciones) {
@@ -907,7 +1011,7 @@ export async function obtenerReportesPorActividad(req, res) {
                                         const emailUsuario = historial.emailUsuario || "Desconocido";
                                         const nombreUsuario = emailUsuario.split('@')[0];
                                         colaboradoresUnicos.add(nombreUsuario);
-                                        
+
                                         reportesEncontrados.push({
                                             tipo: 'historialExplicaciones',
                                             actividadId: actividad.actividadId,
@@ -928,13 +1032,13 @@ export async function obtenerReportesPorActividad(req, res) {
                                     }
                                 }
                             }
-                            
+
                             // BUSCAR EN ACTUALIZADOPOR
                             if (pendiente.actualizadoPor) {
                                 const emailUsuario = pendiente.actualizadoPor;
                                 const nombreUsuario = emailUsuario.split('@')[0];
                                 colaboradoresUnicos.add(nombreUsuario);
-                                
+
                                 reportesEncontrados.push({
                                     tipo: 'actualizadoPor',
                                     actividadId: actividad.actividadId,
@@ -977,7 +1081,7 @@ export async function obtenerReportesPorActividad(req, res) {
 
         // 4. Ordenar reportes por fecha (más reciente primero)
         Object.keys(reportesPorActividad).forEach(key => {
-            reportesPorActividad[key].reportes.sort((a, b) => 
+            reportesPorActividad[key].reportes.sort((a, b) =>
                 new Date(b.fecha) - new Date(a.fecha)
             );
         });
@@ -1003,10 +1107,10 @@ export async function obtenerReportesPorActividad(req, res) {
 
     } catch (error) {
         console.error("❌ Error:", error);
-        res.status(500).json({ 
-            success: false, 
+        res.status(500).json({
+            success: false,
             error: "Error al buscar reportes por actividad",
-            detalle: error.message 
+            detalle: error.message
         });
     }
 }

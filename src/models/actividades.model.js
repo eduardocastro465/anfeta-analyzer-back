@@ -45,12 +45,13 @@ const pendienteSchema = new mongoose.Schema(
     pendienteId: String,
     nombre: String,
     descripcion: String,
+    queHizo: String,
     terminada: { type: Boolean, default: false },
     confirmada: { type: Boolean, default: false },
     duracionMin: { type: Number, default: 0 },
     fechaCreacion: Date,
     fechaFinTerminada: Date,
-    motivoNoCompletado: String,
+    motivoNoCompletado: { type: String, default: "" },
 
     // 🔥 NUEVOS CAMPOS PARA VOZ
     prioridad: { type: String, enum: ['ALTA', 'MEDIA', 'BAJA', 'URGENTE'], default: 'MEDIA' },
@@ -198,7 +199,7 @@ actividadesSchema.index({ fechaUltimaExplicacion: -1 });
 actividadesSchema.index({ "sesionesVoz.sessionId": 1 });
 
 // 🔥 MIDDLEWARE PARA ACTUALIZAR ESTADÍSTICAS
-actividadesSchema.pre('save', function (next) {
+actividadesSchema.pre('save', async function (next) {
   const doc = this;
 
   // Actualizar estadísticas globales
@@ -235,7 +236,6 @@ actividadesSchema.pre('save', function (next) {
     }
   }
 
-  next();
 });
 
 // 🔥 MÉTODOS DE INSTANCIA ÚTILES

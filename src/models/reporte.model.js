@@ -2,13 +2,23 @@ import mongoose from "mongoose";
 
 const ReportePendienteSchema = new mongoose.Schema(
     {
+        reporteId: {
+            type: String,
+            required: true,
+            unique: true,
+            index: true
+        },
         userId: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "User",
             required: true,
             index: true
         },
-
+        emailUsuario: {
+            type: String,
+            required: true,
+            index: true
+        },
         proyectoNombre: {
             type: String,
             required: true
@@ -35,6 +45,18 @@ const ReportePendienteSchema = new mongoose.Schema(
             type: String,
             required: true
         },
+        tipoReporte: {
+            type: String,
+            enum: ["completado", "pendiente", "cancelado"],
+            required: true,
+            index: true
+        },
+
+        texto: {
+            type: String,
+            required: true
+        },
+
 
         estadoFinal: {
             type: String,
@@ -62,6 +84,36 @@ const ReportePendienteSchema = new mongoose.Schema(
             type: Date,
             default: Date.now,
             index: true
+        },
+        validadaPorIA: {
+            type: Boolean,
+            default: false
+        },
+
+        razonIA: {
+            type: String
+        },
+
+        confianzaIA: {
+            type: Number,
+            min: 0,
+            max: 1
+        },
+
+        calidadExplicacion: {
+            type: Number,
+            min: 0,
+            max: 100
+        },
+        sessionId: {
+            type: String,
+            index: true
+        },
+
+        encontradoEn: {
+            type: String,
+            enum: ["explicacionVoz", "historialExplicaciones", "reporteManual", "reporteTarde"],
+            default: "reporteManual"
         }
     },
     {
