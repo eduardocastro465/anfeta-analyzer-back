@@ -129,6 +129,16 @@ const actividadesSchema = new mongoose.Schema(
     actividades: [actividadSchema],
     ultimaSincronizacion: { type: Date, default: Date.now },
 
+    analisisGuardado: {
+      prompt: String,
+      respuesta: String,
+      provider: String,
+      hashActividades: String,     // Hash para detectar cambios
+      fechaGeneracion: Date,
+      vigente: { type: Boolean, default: true }
+    },
+
+
     // 🔥 METADATOS GLOBALES DE VOZ
     fechaPrimeraExplicacion: Date,
     fechaUltimaExplicacion: Date,

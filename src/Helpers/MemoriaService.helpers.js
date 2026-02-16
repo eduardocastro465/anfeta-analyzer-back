@@ -1,5 +1,5 @@
 import Memoria from "../models/MomeriaAi.model.js";
-import { parseAIJSONSafe, smartAICall } from "../libs/aiService.js";
+import { smartAICall } from "../libs/aiService.js";
 
 class MemoriaService {
 

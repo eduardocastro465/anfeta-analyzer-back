@@ -24,7 +24,8 @@ import {
   obtenerActividadesConTiempoHoy,
   obtenerTodasExplicacionesAdmin,
   modificarMotivoNoCompletado,
-  verificarCambiosTareas
+  verificarCambiosTareas,
+  soloVerificarCambios
 } from '../controllers/assistant.controller.js';
 
 
@@ -61,7 +62,7 @@ router.get('/verificar-cambios-tareas', verificarCambiosTareas);
 
 router.post('/modificar-motivo', modificarMotivoNoCompletado);
 
-// router.get('/tareas-sin-descripcion', obtenerTareasSinDescripcion);
+router.get('/soloVerificarCambios', soloVerificarCambios);
 
 
 export default router;
