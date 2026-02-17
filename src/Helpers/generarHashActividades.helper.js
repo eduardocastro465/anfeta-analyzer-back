@@ -10,11 +10,10 @@ export function generarHashActividades(actividadesFinales, revisionesPorActivida
     titulo: a.titulo,
     horario: `${a.horaInicio}-${a.horaFin}`,
     tareas: (revisionesPorActividad[a.id]?.pendientesConTiempo || [])
-      .map(t => t.id)
+      .map(t => `${t.id}:${t.duracionMin}`)
       .sort()
       .join(',')
   }));
 
   return crypto.createHash('sha256').update(JSON.stringify(datos)).digest('hex');
 }
-

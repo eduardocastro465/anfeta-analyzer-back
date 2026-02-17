@@ -1085,9 +1085,8 @@ export async function getActividadesConRevisiones(req, res) {
       documentoUsuario?.analisisGuardado?.vigente &&
       documentoUsuario.analisisGuardado.hashActividades === hashActual
     ) {
-      console.log("✅ Reutilizando análisis guardado (sin cambios)");
-      console.log("📊 Hash actual:", hashActual);
-      console.log("📊 Hash guardado:", documentoUsuario.analisisGuardado.hashActividades);
+      console.log("Reutilizando análisis guardado (sin cambios)");
+
 
       analisisReutilizado = true;
 
@@ -1104,15 +1103,14 @@ export async function getActividadesConRevisiones(req, res) {
 
       // 🔍 LOGS DE DEBUG
       if (!documentoUsuario) {
-        console.log("❌ No existe documento del usuario");
+        console.log("No existe documento del usuario");
       } else if (!documentoUsuario.analisisGuardado) {
-        console.log("❌ No existe analisisGuardado en el documento");
+        console.log("No existe analisisGuardado en el documento");
       } else if (!documentoUsuario.analisisGuardado.vigente) {
-        console.log("❌ El análisis guardado no está vigente");
+        console.log("El análisis guardado no está vigente");
       } else {
-        console.log("📊 Hash diferente:");
-        console.log("   - Hash actual:", hashActual);
-        console.log("   - Hash guardado:", documentoUsuario.analisisGuardado.hashActividades);
+        console.log("Hash diferente");
+
       }
 
       // Detectar cambios
@@ -1127,12 +1125,12 @@ export async function getActividadesConRevisiones(req, res) {
       let mensajeAdicionalCambios = "";
       if (cambiosDetectados.cambiosDetectados && !cambiosDetectados.esPrimeraVez) {
         mensajeAdicionalCambios = `
-📊 CAMBIOS DETECTADOS EN TUS REVISIONES:
+ CAMBIOS DETECTADOS EN TUS REVISIONES:
 `;
 
         if (cambiosDetectados.revisionesNuevas.length > 0) {
           mensajeAdicionalCambios += `
-✅ NUEVAS REVISIONES AGREGADAS (${cambiosDetectados.revisionesNuevas.length}):
+ NUEVAS REVISIONES AGREGADAS (${cambiosDetectados.revisionesNuevas.length}):
 ${cambiosDetectados.revisionesNuevas.map(r => {
             const revisiones = revisionesPorActividad[r.id];
             const totalTareas = revisiones?.pendientesConTiempo?.length || 0;
@@ -1144,7 +1142,7 @@ ${cambiosDetectados.revisionesNuevas.map(r => {
 
         if (cambiosDetectados.revisionesEliminadas.length > 0) {
           mensajeAdicionalCambios += `
-❌ REVISIONES MOVIDAS O ELIMINADAS (${cambiosDetectados.revisionesEliminadas.length}):
+ REVISIONES MOVIDAS O ELIMINADAS (${cambiosDetectados.revisionesEliminadas.length}):
 ${cambiosDetectados.revisionesEliminadas.map(r =>
             `   - ${r.titulo} (${r.horaInicio}-${r.horaFin}) - Ya no está en tu agenda de hoy`
           ).join('\n')}
@@ -1153,7 +1151,7 @@ ${cambiosDetectados.revisionesEliminadas.map(r =>
 
         if (cambiosDetectados.cambiosEnTareas.length > 0) {
           mensajeAdicionalCambios += `
-🔄 CAMBIOS EN TAREAS DENTRO DE REVISIONES EXISTENTES:
+CAMBIOS EN TAREAS DENTRO DE REVISIONES EXISTENTES:
 ${cambiosDetectados.cambiosEnTareas.map(c => {
             let mensaje = `   ${c.titulo} (${c.horario}):`;
             if (c.tareasNuevas.length > 0) {
@@ -1168,7 +1166,7 @@ ${cambiosDetectados.cambiosEnTareas.map(c => {
         }
 
         mensajeAdicionalCambios += `
-⚠️ IMPORTANTE: Solo necesitas reportar las NUEVAS tareas. Las eliminadas ya fueron limpiadas.
+ IMPORTANTE: Solo necesitas reportar las NUEVAS tareas. Las eliminadas ya fueron limpiadas.
 `;
       }
 
@@ -1468,8 +1466,11 @@ RESPONDE SOLO EL TÍTULO
       odooUserId: odooUserId
     });
 
-    const actividadesParaGuardar = actividadesFinales.map(actividad => {
-      const revisiones = revisionesPorActividad[actividad.id];
+    const actividadesParaGuardar = actividadesEnHorarioLaboral.map(actividad => {
+      const revisiones = revisionesPorActividad[actividad.id] || {
+        pendientesConTiempo: [],
+        pendientesSinTiempo: []
+      };
 
       const todasLasTareas = [
         ...(revisiones.pendientesConTiempo || []),
@@ -4273,6 +4274,16 @@ export async function verificarCambiosDesdeAnfeta(req, res) {
         if (!idsActividadesValidas.has(actividadRev.id)) return;
         if (actividadRev.titulo?.toLowerCase().includes("00ftf")) return;
 
+        console.log("Pendientes crudos de actividad", actividadRev.id, ":",
+          JSON.stringify((actividadRev.pendientes ?? []).map(p => ({
+            id: p.id,
+            nombre: p.nombre,
+            duracionMin: p.duracionMin,
+            fechaCreacion: p.fechaCreacion,
+            assignees: p.assignees?.map(a => a.name)
+          })))
+        );
+
         const pendientesValidos = (actividadRev.pendientes ?? []).filter((p) => {
           const estaAsignado = p.assignees?.some(
             (a) => a.name === email
@@ -4310,10 +4321,12 @@ export async function verificarCambiosDesdeAnfeta(req, res) {
       actividadesConRevisionesConTiempoIds.has(actividad.id)
     );
 
-    const hashAnfeta = generarHashActividades(
+    const hashAnfeta = await generarHashActividades(
       actividadesFinales,
       revisionesPorActividad
     );
+
+
 
     const documentoUsuario = await ActividadesSchema.findOne({
       odooUserId: userId
@@ -4327,18 +4340,28 @@ export async function verificarCambiosDesdeAnfeta(req, res) {
       });
     }
 
+    console.log("🔍 actividadesFinales:", JSON.stringify(actividadesFinales.map(a => ({
+      id: a.id,
+      titulo: a.titulo
+    }))));
+    console.log("🔍 revisionesPorActividad:", JSON.stringify(revisionesPorActividad));
+    console.log("📊 Hash Anfeta:", hashAnfeta);
+    console.log("📊 Hash Guardado:",
+
+      documentoUsuario?.analisisGuardado?.hashActividades);
+
     const hashGuardado =
       documentoUsuario.analisisGuardado.hashActividades;
 
     const analisisVigente = documentoUsuario.analisisGuardado?.vigente !== false;
     const huboCambios = hashAnfeta !== hashGuardado || !analisisVigente;
 
-    console.log("📊 Comparación de hashes:");
-    console.log("   Hash Anfeta:", hashAnfeta);
-    console.log("   Hash Guardado:", hashGuardado);
-    console.log("   Análisis vigente:", documentoUsuario.analisisGuardado.vigente);
-    console.log("   Hubo Cambios:", huboCambios ? "✅ SÍ" : "❌ NO");
-    console.log("Hubo Cambios:", huboCambios);
+
+    if (huboCambios) {
+      console.log("Hubo cambios en Anfeta");
+    } else {
+      console.log("No hubo cambios en Anfeta");
+    }
 
     return res.json({
       success: true,
