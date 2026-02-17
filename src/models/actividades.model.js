@@ -53,6 +53,9 @@ const pendienteSchema = new mongoose.Schema(
     fechaFinTerminada: Date,
     motivoNoCompletado: { type: String, default: "" },
 
+    notionBlockId: String,
+    tieneAdjuntosNotion: { type: Boolean, default: false },
+
     // 🔥 NUEVOS CAMPOS PARA VOZ
     prioridad: { type: String, enum: ['ALTA', 'MEDIA', 'BAJA', 'URGENTE'], default: 'MEDIA' },
 

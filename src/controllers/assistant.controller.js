@@ -932,7 +932,7 @@ export async function getActividadesConRevisiones(req, res) {
         {
           params: {
             date: today,
-            colaborador: email
+            assignee: email
           }
         }
       );
@@ -982,11 +982,24 @@ export async function getActividadesConRevisiones(req, res) {
             pendientesSinTiempo: []
           };
 
+          const hoyMexico = new Date().toLocaleDateString('sv-SE', {
+            timeZone: 'America/Mexico_City'
+          });
+
           // Procesar pendientes
           (actividadRev.pendientes ?? []).forEach(p => {
             // Filtro 4: Verificar asignación al usuario
             const estaAsignado = p.assignees?.some(a => a.name === email);
             if (!estaAsignado) return;
+
+
+            const fechaPendiente = p.fechaCreacion
+              ? new Date(p.fechaCreacion).toLocaleDateString('sv-SE', {
+                timeZone: 'America/Mexico_City'
+              })
+              : null;
+
+            if (fechaPendiente > hoyMexico) return;
 
             // ✅ NUEVO: Extraer colaboradores SOLO de tareas asignadas a ti
             (p.assignees ?? []).forEach(assignee => {
@@ -2232,11 +2245,10 @@ export async function validarYGuardarExplicacion(req, res) {
       nombrePendiente,
       explicacion,
       duracionMin,
-      userEmail,      // Email del usuario
-      userId,         // ID o email alternativo
+      userId,
       sessionId,
-      priority,       // Prioridad de la tarea (opcional)
-      duration       // Duración (opcional)
+      priority,
+      duration
     } = req.body;
 
     // Validar datos esenciales
@@ -2259,7 +2271,7 @@ export async function validarYGuardarExplicacion(req, res) {
 
     const decoded = jwt.verify(token, TOKEN_SECRET);
     const odooUserId = decoded.id;
-
+    const odooUserEmail = decoded.email;
 
     // Validar con IA
     const prompt = `
@@ -2293,7 +2305,6 @@ Responde ÚNICAMENTE en JSON:
 }
 `;
 
-
     const aiResult = await smartAICall(prompt);
 
     if (!aiResult || !aiResult.text) {
@@ -2304,35 +2315,31 @@ Responde ÚNICAMENTE en JSON:
       });
     }
 
-
     const aiEvaluation = parseAIJSONSafe(aiResult.text);
 
     if (!aiEvaluation.esValida) {
-
       return res.status(200).json({
         esValida: false,
         razon: aiEvaluation.razon,
         datos: {
           actividad: actividadTitulo,
           pendiente: nombrePendiente,
-          emailUsuario: userEmail || userId
+          emailUsuario: odooUserEmail || "email-no-proporcionado"
         }
       });
     }
 
-
-
     // PREPARAR DATOS PARA GUARDAR
-    const emailUsuario = userEmail || userId || "email-no-proporcionado";
+    const emailUsuario = odooUserEmail || "email-no-proporcionado";
     const fechaActual = new Date();
 
-    // Datos completos para guardar
     const datosExplicacion = {
       texto: explicacion,
       emailUsuario: emailUsuario,
       fechaRegistro: fechaActual,
       validadaPorIA: true,
       razonIA: aiEvaluation.razon,
+      originalPor: emailUsuario, // ✅ registrar autor original
       metadata: {
         sessionId: sessionId,
         duracionMin: duracionMin || duration,
@@ -2342,52 +2349,49 @@ Responde ÚNICAMENTE en JSON:
       }
     };
 
-
-
-    // ACTUALIZACIÓN COMPLETA CON TODOS LOS CAMPOS
+    // ACTUALIZACIÓN COMPLETA
     const resultado = await ActividadesSchema.findOneAndUpdate(
       {
-        odooUserId: odooUserId,
+        odooUserId,
         "actividades.actividadId": actividadId,
         "actividades.pendientes.pendienteId": idPendiente
       },
       {
         $set: {
-          // 1. Descripción básica
-          "actividades.$[act].pendientes.$[pend].descripcion": explicacion,
+          // Descripción con autor incluido
+          "actividades.$[act].pendientes.$[pend].descripcion": `${explicacion} (por ${emailUsuario})`,
 
-          // 2. Objeto completo de explicación de voz
           "actividades.$[act].pendientes.$[pend].explicacionVoz": datosExplicacion,
 
-          // 3. Metadatos de actividad
+          // Metadatos de actividad
           "actividades.$[act].ultimaActualizacion": fechaActual,
           "actividades.$[act].actualizadoPor": emailUsuario,
           "actividades.$[act].fechaRevisionVoz": fechaActual,
 
-          // 4. Metadatos de pendiente
+          // Metadatos de pendiente
           "actividades.$[act].pendientes.$[pend].ultimaActualizacion": fechaActual,
           "actividades.$[act].pendientes.$[pend].actualizadoPor": emailUsuario,
           "actividades.$[act].pendientes.$[pend].revisadoPorVoz": true,
           "actividades.$[act].pendientes.$[pend].fechaRevisionVoz": fechaActual,
 
-          // 5. Si hay prioridad y duración, actualizarlas
           ...(priority && {
             "actividades.$[act].pendientes.$[pend].prioridad": priority
           }),
           ...(duracionMin && {
             "actividades.$[act].pendientes.$[pend].duracionMin": duracionMin
-          })
+          }),
+          "analisisGuardado.vigente": false,
+          "analisisGuardado.ultimaInvalidacion": fechaActual,
+          "analisisGuardado.razonInvalidacion": "Explicación sincronizada de otro usuario"
         },
-
-        // 6. Añadir al historial de explicaciones
         $push: {
           "actividades.$[act].pendientes.$[pend].historialExplicaciones": {
             texto: explicacion,
-            emailUsuario: emailUsuario,
+            emailUsuario,
             fecha: fechaActual,
             validadaPorIA: true,
             razonIA: aiEvaluation.razon,
-            sessionId: sessionId,
+            sessionId,
             resultado: {
               esValida: true,
               puntuacion: null,
@@ -2407,64 +2411,45 @@ Responde ÚNICAMENTE en JSON:
     );
 
     if (!resultado) {
-      console.error("❌ No se pudo encontrar el documento para actualizar");
       return res.status(404).json({
         esValida: false,
         razon: "No se encontró la actividad o pendiente especificado"
       });
     }
 
-    // 🔍 VERIFICAR LO GUARDADO
-    const actividadActualizada = resultado.actividades.find(
-      a => a.actividadId === actividadId
-    );
+    const actividadActualizada = resultado.actividades.find(a => a.actividadId === actividadId);
+    const pendienteGuardado = actividadActualizada?.pendientes.find(p => p.pendienteId === idPendiente);
 
-    const pendienteGuardado = actividadActualizada?.pendientes.find(
-      p => p.pendienteId === idPendiente
-    );
-
-    // 🔄 SINCRONIZAR CON OTROS USUARIOS QUE COMPARTEN EL PENDIENTE
+    // Sincronizar con otros usuarios
     await ActividadesSchema.updateMany(
       {
-        odooUserId: { $ne: odooUserId }, // ❌ excluir usuario origen
+        odooUserId: { $ne: odooUserId },
         "actividades.actividadId": actividadId,
         "actividades.pendientes.pendienteId": idPendiente
       },
       {
         $set: {
-          "actividades.$[act].pendientes.$[pend].descripcion": explicacion,
+          "actividades.$[act].pendientes.$[pend].descripcion": `${explicacion} (por ${emailUsuario})`,
           "actividades.$[act].pendientes.$[pend].explicacionVoz": datosExplicacion,
-
           "actividades.$[act].ultimaActualizacion": fechaActual,
           "actividades.$[act].actualizadoPor": emailUsuario,
           "actividades.$[act].fechaRevisionVoz": fechaActual,
-
           "actividades.$[act].pendientes.$[pend].ultimaActualizacion": fechaActual,
           "actividades.$[act].pendientes.$[pend].actualizadoPor": emailUsuario,
           "actividades.$[act].pendientes.$[pend].revisadoPorVoz": true,
           "actividades.$[act].pendientes.$[pend].fechaRevisionVoz": fechaActual,
-
-          ...(priority && {
-            "actividades.$[act].pendientes.$[pend].prioridad": priority
-          }),
-          ...(duracionMin && {
-            "actividades.$[act].pendientes.$[pend].duracionMin": duracionMin
-          })
+          ...(priority && { "actividades.$[act].pendientes.$[pend].prioridad": priority }),
+          ...(duracionMin && { "actividades.$[act].pendientes.$[pend].duracionMin": duracionMin })
         },
-
         $push: {
           "actividades.$[act].pendientes.$[pend].historialExplicaciones": {
             texto: explicacion,
-            emailUsuario: emailUsuario,
+            emailUsuario,
             fecha: fechaActual,
             validadaPorIA: true,
             razonIA: aiEvaluation.razon,
-            sessionId: sessionId,
-            resultado: {
-              esValida: true,
-              puntuacion: null,
-              feedback: aiEvaluation.razon
-            }
+            sessionId,
+            resultado: { esValida: true, puntuacion: null, feedback: aiEvaluation.razon }
           }
         }
       },
@@ -2476,44 +2461,25 @@ Responde ÚNICAMENTE en JSON:
       }
     );
 
-
-
-
-    //  PREPARAR RESPUESTA COMPLETA
-    const respuesta = {
+    // Preparar respuesta
+    return res.status(200).json({
       esValida: true,
       mensaje: "Explicación validada y guardada exitosamente",
       datosGuardados: {
-        emailUsuario: emailUsuario,
-        actividad: {
-          id: actividadId,
-          titulo: actividadTitulo
-        },
-        pendiente: {
-          id: idPendiente,
-          nombre: nombrePendiente
-        },
-        explicacion: {
-          texto: explicacion,
-          duracion: duracionMin || duration,
-          prioridad: priority
-        },
+        emailUsuario,
+        actividad: { id: actividadId, titulo: actividadTitulo },
+        pendiente: { id: idPendiente, nombre: nombrePendiente },
+        explicacion: { texto: explicacion, duracion: duracionMin || duration, prioridad: priority },
         timestamp: fechaActual.toISOString(),
-        validacionIA: {
-          esValida: true,
-          razon: aiEvaluation.razon
-        }
+        validacionIA: { esValida: true, razon: aiEvaluation.razon }
       },
       metadata: {
-        sessionId: sessionId,
+        sessionId,
         totalExplicacionesGuardadas: pendienteGuardado?.historialExplicaciones?.length || 1,
-        fechaProcesamiento: new Date().toISOString()
+        fechaProcesamiento: new Date().toISOString(),
+        analisisInvalidado: resultado.analisisGuardado?.vigente === false
       }
-    };
-
-
-
-    return res.status(200).json(respuesta);
+    });
 
   } catch (error) {
     console.error("Error en validarYGuardarExplicacion:", error);
@@ -4228,6 +4194,166 @@ export async function soloVerificarCambios(req, res) {
       success: false,
       message: "Error al verificar cambios",
       error: error.message
+    });
+  }
+}
+
+export async function verificarCambiosDesdeAnfeta(req, res) {
+  try {
+    const { token } = req.cookies;
+    const decoded = jwt.verify(token, TOKEN_SECRET);
+    const { id: userId, email } = decoded;
+
+    const today = new Date().toISOString().split("T")[0];
+
+    const [actividadesResponse, revisionesResponse] = await Promise.all([
+      axios.get(`${API_URL_ANFETA}/actividades/assignee/${email}/del-dia`),
+      axios.get(`${API_URL_ANFETA}/reportes/revisiones-por-fecha`, {
+        params: { date: today, assignee: email }
+      })
+    ]);
+
+    const actividadesRaw = actividadesResponse.data?.data || [];
+
+    if (!Array.isArray(actividadesRaw) || actividadesRaw.length === 0) {
+      return res.json({
+        success: true,
+        cambios: false,
+        mensaje: "No hay actividades"
+      });
+    }
+
+    const esActividadValida = (actividad) => {
+      const titulo = actividad.titulo?.toLowerCase() || "";
+      return !titulo.startsWith("00ftf") && actividad.status !== "00sec";
+    };
+
+    const HORARIO_INICIO = 9.5;
+    const HORARIO_FIN = 17.0;
+
+    const actividadesEnHorarioLaboral = actividadesRaw
+      .filter(esActividadValida)
+      .filter((actividad) => {
+        const horaInicioDecimal = convertirHoraADecimal(actividad.horaInicio);
+        const horaFinDecimal = convertirHoraADecimal(actividad.horaFin);
+        return (
+          horaInicioDecimal >= HORARIO_INICIO &&
+          horaInicioDecimal < HORARIO_FIN &&
+          horaFinDecimal <= HORARIO_FIN
+        );
+      });
+
+    if (actividadesEnHorarioLaboral.length === 0) {
+      return res.json({
+        success: true,
+        cambios: false,
+        mensaje: "No hay actividades en horario laboral"
+      });
+    }
+
+    const idsActividadesValidas = new Set(
+      actividadesEnHorarioLaboral.map((a) => a.id)
+    );
+
+    const todasRevisiones =
+      revisionesResponse.data?.success
+        ? revisionesResponse.data.data
+        : { colaboradores: [] };
+
+    const revisionesPorActividad = {};
+    const actividadesConRevisionesConTiempoIds = new Set();
+
+
+    const hoyMexico = new Date().toLocaleDateString('sv-SE', {
+      timeZone: 'America/Mexico_City'
+    });
+
+    (todasRevisiones?.colaboradores ?? []).forEach((colaborador) => {
+      (colaborador.items?.actividades ?? []).forEach((actividadRev) => {
+        if (!idsActividadesValidas.has(actividadRev.id)) return;
+        if (actividadRev.titulo?.toLowerCase().includes("00ftf")) return;
+
+        const pendientesValidos = (actividadRev.pendientes ?? []).filter((p) => {
+          const estaAsignado = p.assignees?.some(
+            (a) => a.name === email
+          );
+
+          if (!estaAsignado || p.duracionMin <= 0) return false;
+
+          const fechaPendiente = p.fechaCreacion
+            ? new Date(p.fechaCreacion).toLocaleDateString('sv-SE', {
+              timeZone: 'America/Mexico_City'
+            })
+            : null;
+
+          if (!fechaPendiente || fechaPendiente > hoyMexico) return false;
+
+          return true;
+        });
+
+
+        if (pendientesValidos.length === 0) return;
+
+        revisionesPorActividad[actividadRev.id] = {
+          pendientesConTiempo: pendientesValidos.map((p) => ({
+            id: p.id,
+            nombre: p.nombre,
+            duracionMin: p.duracionMin
+          }))
+        };
+
+        actividadesConRevisionesConTiempoIds.add(actividadRev.id);
+      });
+    });
+
+    const actividadesFinales = actividadesEnHorarioLaboral.filter((actividad) =>
+      actividadesConRevisionesConTiempoIds.has(actividad.id)
+    );
+
+    const hashAnfeta = generarHashActividades(
+      actividadesFinales,
+      revisionesPorActividad
+    );
+
+    const documentoUsuario = await ActividadesSchema.findOne({
+      odooUserId: userId
+    });
+
+    if (!documentoUsuario?.analisisGuardado?.hashActividades) {
+      return res.json({
+        success: true,
+        cambios: true,
+        mensaje: "No hay análisis guardado, se requiere generar uno nuevo"
+      });
+    }
+
+    const hashGuardado =
+      documentoUsuario.analisisGuardado.hashActividades;
+
+    const analisisVigente = documentoUsuario.analisisGuardado?.vigente !== false;
+    const huboCambios = hashAnfeta !== hashGuardado || !analisisVigente;
+
+    console.log("📊 Comparación de hashes:");
+    console.log("   Hash Anfeta:", hashAnfeta);
+    console.log("   Hash Guardado:", hashGuardado);
+    console.log("   Análisis vigente:", documentoUsuario.analisisGuardado.vigente);
+    console.log("   Hubo Cambios:", huboCambios ? "✅ SÍ" : "❌ NO");
+    console.log("Hubo Cambios:", huboCambios);
+
+    return res.json({
+      success: true,
+      cambios: huboCambios,
+      mensaje: huboCambios
+        ? "Se detectaron cambios en Anfeta"
+        : "No hay cambios"
+    });
+
+  } catch (error) {
+    console.error("Error en verificarCambiosDesdeAnfeta:", error);
+    return res.status(500).json({
+      success: false,
+      error: "Error al verificar cambios",
+      details: error.message
     });
   }
 }

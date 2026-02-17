@@ -10,7 +10,8 @@ import {
   obtenerMensajesConversacion,
   verificarAnalisisDelDia,
   guardarExplicacionesTarde,
-  eliminarConversacion
+  eliminarConversacion,
+  verificarCambiosDesdeAnfeta
 } from '../controllers/assistant.controller.js';
 
 import {
@@ -63,6 +64,7 @@ router.get('/verificar-cambios-tareas', verificarCambiosTareas);
 router.post('/modificar-motivo', modificarMotivoNoCompletado);
 
 router.get('/soloVerificarCambios', soloVerificarCambios);
+router.get("/verificar-cambios-anfeta", verificarCambiosDesdeAnfeta);
 
 
 export default router;
