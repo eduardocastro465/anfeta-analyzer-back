@@ -2,7 +2,7 @@
 import ActividadesSchema from "../models/actividades.model.js";
 
 export async function obtenerTodasExplicacionesAdmin(req, res) {
-  console.log("📊 ===== OBTENIENDO TODAS LAS EXPLICACIONES (LOCALES) =====");
+  // console.log("📊 ===== OBTENIENDO TODAS LAS EXPLICACIONES (LOCALES) =====");
   
   try {
     // 1. Obtener TODAS las actividades locales
@@ -10,7 +10,7 @@ export async function obtenerTodasExplicacionesAdmin(req, res) {
       .sort({ updatedAt: -1 })
       .lean();
     
-    console.log(`✅ Encontradas ${todasActividades.length} actividades en MongoDB`);
+    // console.log(`✅ Encontradas ${todasActividades.length} actividades en MongoDB`);
 
     // 2. Procesar cada documento de actividades
     const usuariosProcesados = [];
@@ -58,7 +58,7 @@ export async function obtenerTodasExplicacionesAdmin(req, res) {
 
         usuariosProcesados.push(usuario);
         
-        console.log(`👤 Usuario ${index + 1}: ${userId} - ${actividades.length} actividades, ${todasTareas.length} tareas`);
+        // console.log(`👤 Usuario ${index + 1}: ${userId} - ${actividades.length} actividades, ${todasTareas.length} tareas`);
         
       } catch (error) {
         console.error(`❌ Error procesando documento ${index}:`, error.message);
@@ -144,14 +144,14 @@ export async function obtenerTodasExplicacionesAdmin(req, res) {
       }
     };
 
-    console.log("========================================");
-    console.log(`🎯 RESPUESTA FINAL PREPARADA:`);
-    console.log(`👥 Total usuarios: ${usuariosProcesados.length}`);
-    console.log(`📁 Total actividades: ${totalActividadesGlobal}`);
-    console.log(`📋 Total tareas: ${totalTareasGlobal}`);
-    console.log(`⏱️ Tiempo total: ${estadisticasGlobales.tiempoTotalFormateado}`);
-    console.log(`📊 Porcentaje terminadas: ${estadisticasGlobales.porcentajeTerminadas}%`);
-    console.log("========================================");
+    // console.log("========================================");
+    // console.log(`🎯 RESPUESTA FINAL PREPARADA:`);
+    // console.log(`👥 Total usuarios: ${usuariosProcesados.length}`);
+    // console.log(`📁 Total actividades: ${totalActividadesGlobal}`);
+    // console.log(`📋 Total tareas: ${totalTareasGlobal}`);
+    // console.log(`⏱️ Tiempo total: ${estadisticasGlobales.tiempoTotalFormateado}`);
+    // console.log(`📊 Porcentaje terminadas: ${estadisticasGlobales.porcentajeTerminadas}%`);
+    // console.log("========================================");
 
     return res.json(response);
 

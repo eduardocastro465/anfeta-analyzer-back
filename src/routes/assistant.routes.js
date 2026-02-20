@@ -26,7 +26,8 @@ import {
   obtenerTodasExplicacionesAdmin,
   modificarMotivoNoCompletado,
   verificarCambiosTareas,
-  soloVerificarCambios
+  soloVerificarCambios,
+  getActividadesDesdeDB
 } from '../controllers/assistant.controller.js';
 
 
@@ -65,6 +66,7 @@ router.post('/modificar-motivo', modificarMotivoNoCompletado);
 
 router.get('/soloVerificarCambios', soloVerificarCambios);
 router.get("/verificar-cambios-anfeta", verificarCambiosDesdeAnfeta);
+router.get("/actividades-desde-db", getActividadesDesdeDB);
 
 
 export default router;

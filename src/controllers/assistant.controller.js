@@ -222,16 +222,6 @@ function limpiarNombreColaborador(correo) {
   return nombreBase.charAt(0).toUpperCase() + nombreBase.slice(1);
 }
 
-/**
- * Formatea la hora desde UTC a horario local
- * @param {string} utcTimeString - Fecha en formato UTC
- * @returns {string} Hora formateada (ej: "09:00")
- */
-function formatearHoraUTC(utcTimeString) {
-  if (!utcTimeString) return "00:00";
-  const date = new Date(utcTimeString);
-  return date.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' });
-}
 
 /**
  * Convierte una hora en formato "HH:MM" a número decimal
@@ -710,12 +700,20 @@ ${index + 1}. ${actividad.horaInicio} - ${actividad.horaFin} - ${actividad.titul
 
 PREGUNTA DEL USUARIO: "${question}"
 
+EJEMPLO DE FORMATO ESPERADO:
 INSTRUCCIONES DE RESPUESTA:
-1. COMIENZA con un resumen general
-2. MENCIONA las actividades principales y sus responsables
-3. DESTACA las tareas de ALTA prioridad
-4. SUGIERE un orden de ejecución
-5. MÁXIMO 8 renglones
+1. EXACTAMENTE 3 o 4 párrafos
+2. MÁXIMO 26 caracteres por párrafo en total
+3. Sin títulos ni secciones
+4. Directo y conciso
+
+EJEMPLO FORMATO:
+"6 pendientes, ~4h con Nnico.
+
+Prioriza rutas back
+y reporte vespertino.
+
+Sin pendientes urgentes."
 `.trim();
 
       aiResult = await smartAICall(promptGenerado);
@@ -743,7 +741,7 @@ INSTRUCCIONES DE RESPUESTA:
     const cambiosDetectados = await detectarCambiosEnRevisiones(
       odooUserId,
       actividadesFinales,
-      revisionesPorActividad
+      sessionId
     );
 
     const actividadesGuardadas = await ActividadesSchema.findOne({ odooUserId: odooUserId });
@@ -801,10 +799,20 @@ INSTRUCCIONES DE RESPUESTA:
               return {
                 ...tarea,
                 descripcion: pendienteGuardado?.descripcion || "",
+                explicacionVoz: pendienteGuardado?.explicacionVoz || null,
                 esNueva: esTareaNueva
               };
             }),
-            tareasConTiempo: revisiones.pendientesConTiempo || [],
+            tareasConTiempo: (revisiones.pendientesConTiempo || []).map(t => {
+              const pendienteGuardado = actividadGuardada?.pendientes?.find(
+                p => p.pendienteId === t.id
+              );
+              return {
+                ...t,
+                descripcion: pendienteGuardado?.descripcion || "",
+                explicacionVoz: pendienteGuardado?.explicacionVoz || null
+              };
+            }),
             tareasSinTiempo: revisiones.pendientesSinTiempo || [],
             totalTareasConTiempo: revisiones.pendientesConTiempo?.length || 0,
             totalTareasSinTiempo: revisiones.pendientesSinTiempo?.length || 0,
@@ -927,12 +935,13 @@ RESPONDE SOLO EL TITULO
           return {
             pendienteId: t.id,
             nombre: t.nombre,
-            descripcion: t.descripcion && t.descripcion.trim() !== ""
-              ? t.descripcion
-              : (pendienteExistente?.descripcion || ""),
-            queHizo: t.queHizo && t.queHizo.trim() !== ""
-              ? t.queHizo
-              : (pendienteExistente?.queHizo || ""),
+            descripcion: pendienteExistente?.descripcion || "",
+            queHizo: pendienteExistente?.queHizo || "",
+            revisadoPorVoz: pendienteExistente?.revisadoPorVoz || false,
+            historialExplicaciones: pendienteExistente?.historialExplicaciones || [],
+            explicacionVoz: pendienteExistente?.explicacionVoz || null,
+            actualizadoPor: pendienteExistente?.actualizadoPor || null,
+            fechaRevisionVoz: pendienteExistente?.fechaRevisionVoz || null,
             terminada: t.terminada,
             confirmada: t.confirmada,
             duracionMin: t.duracionMin,
@@ -950,6 +959,7 @@ RESPONDE SOLO EL TITULO
       {
         $set: {
           odooUserId: odooUserId,
+          emailUsuario: email,
           actividades: actividadesParaGuardar,
           ultimaSincronizacion: new Date(),
           analisisGuardado: {
@@ -1090,6 +1100,7 @@ RESPONDE SOLO EL TITULO
     });
   }
 }
+
 export async function getTareasTerminadasConRevisiones(req, res) {
   try {
     const { email, question = "¿Qué tareas ya terminé hoy? ¿Cuáles están confirmadas?", showAll = false } = sanitizeObject(req.body);
@@ -1837,13 +1848,21 @@ Responde ÚNICAMENTE en JSON:
       }
     );
 
-    if (!resultado) {
-      return res.status(404).json({
-        esValida: false,
-        razon: "No se encontró la actividad o pendiente especificado"
-      });
-    }
+    console.log("📝 Resultado del update:", resultado ? "encontrado" : "null");
 
+    if (!resultado) {
+      const existe = await ActividadesSchema.findOne({
+        odooUserId,
+        "actividades.actividadId": actividadId
+      });
+      console.log("🔎 Documento con actividadId existe:", existe ? "sí" : "no");
+
+      const existePendiente = await ActividadesSchema.findOne({
+        odooUserId,
+        "actividades.pendientes.pendienteId": idPendiente
+      });
+      console.log("🔎 Documento con pendienteId existe:", existePendiente ? "sí" : "no");
+    }
     const actividadActualizada = resultado.actividades.find(a => a.actividadId === actividadId);
     const pendienteGuardado = actividadActualizada?.pendientes.find(p => p.pendienteId === idPendiente);
 
@@ -1858,15 +1877,19 @@ Responde ÚNICAMENTE en JSON:
         $set: {
           "actividades.$[act].pendientes.$[pend].descripcion": `${explicacion} (por ${emailUsuario})`,
           "actividades.$[act].pendientes.$[pend].explicacionVoz": datosExplicacion,
+          "actividades.$[act].pendientes.$[pend].queHizo": explicacion,
+          "actividades.$[act].pendientes.$[pend].revisadoPorVoz": true,
+          "actividades.$[act].pendientes.$[pend].fechaRevisionVoz": fechaActual,
+          "actividades.$[act].pendientes.$[pend].ultimaActualizacion": fechaActual,
+          "actividades.$[act].pendientes.$[pend].actualizadoPor": emailUsuario,
           "actividades.$[act].ultimaActualizacion": fechaActual,
           "actividades.$[act].actualizadoPor": emailUsuario,
           "actividades.$[act].fechaRevisionVoz": fechaActual,
-          "actividades.$[act].pendientes.$[pend].ultimaActualizacion": fechaActual,
-          "actividades.$[act].pendientes.$[pend].actualizadoPor": emailUsuario,
-          "actividades.$[act].pendientes.$[pend].revisadoPorVoz": true,
-          "actividades.$[act].pendientes.$[pend].fechaRevisionVoz": fechaActual,
           ...(priority && { "actividades.$[act].pendientes.$[pend].prioridad": priority }),
-          ...(duracionMin && { "actividades.$[act].pendientes.$[pend].duracionMin": duracionMin })
+          ...(duracionMin && { "actividades.$[act].pendientes.$[pend].duracionMin": duracionMin }),
+          "analisisGuardado.vigente": false,              // ← agrega esto
+          "analisisGuardado.ultimaInvalidacion": fechaActual,
+          "analisisGuardado.razonInvalidacion": "Explicación guardada por compañero"
         },
         $push: {
           "actividades.$[act].pendientes.$[pend].historialExplicaciones": {
@@ -1887,6 +1910,24 @@ Responde ÚNICAMENTE en JSON:
         ]
       }
     );
+
+    const usuariosAfectados = await ActividadesSchema.find({
+      "actividades.actividadId": actividadId
+    }).select("emailUsuario").lean();
+
+    console.log("👥 Usuarios afectados encontrados:", usuariosAfectados);
+
+    usuariosAfectados.forEach(usuario => {
+      if (usuario.emailUsuario) {
+        req.io.to(`usuario:${usuario.emailUsuario}`).emit("cambios-tareas", {
+          tipo: "explicacion-guardada",
+          actividadId,
+          pendienteId: idPendiente,
+          por: emailUsuario
+        });
+        console.log(`📡 Notificado a: ${usuario.emailUsuario}`);
+      }
+    });
 
     // Preparar respuesta
     return res.status(200).json({
@@ -3631,6 +3672,10 @@ export async function verificarCambiosDesdeAnfeta(req, res) {
     const decoded = jwt.verify(token, TOKEN_SECRET);
     const { id: userId, email } = decoded;
 
+    const HORARIO_INICIO = 9.5;
+    const HORARIO_FIN = 17.0;
+
+
     const today = new Date().toISOString().split("T")[0];
 
     const [actividadesResponse, revisionesResponse] = await Promise.all([
@@ -3655,8 +3700,6 @@ export async function verificarCambiosDesdeAnfeta(req, res) {
       return !titulo.startsWith("00ftf") && actividad.status !== "00sec";
     };
 
-    const HORARIO_INICIO = 9.5;
-    const HORARIO_FIN = 17.0;
 
     const actividadesEnHorarioLaboral = actividadesRaw
       .filter(esActividadValida)
@@ -3752,8 +3795,6 @@ export async function verificarCambiosDesdeAnfeta(req, res) {
       revisionesPorActividad
     );
 
-
-
     const documentoUsuario = await ActividadesSchema.findOne({
       odooUserId: userId
     });
@@ -3803,6 +3844,314 @@ export async function verificarCambiosDesdeAnfeta(req, res) {
       success: false,
       error: "Error al verificar cambios",
       details: error.message
+    });
+  }
+}
+
+export async function getActividadesDesdeDB(req, res) {
+  try {
+
+    /* ------------------------------------------------------------------
+       PASO 1: OBTENER USUARIO Y SESIÓN
+    ------------------------------------------------------------------ */
+
+    const { token } = req.cookies;
+
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        message: "No autorizado"
+      });
+    }
+
+    const decoded = jwt.verify(token, TOKEN_SECRET);
+    const { id: odooUserId } = decoded;
+
+    const sessionId = await obtenerSesionActivaDelDia(odooUserId);
+
+    const today = new Date().toLocaleDateString('sv-SE', {
+      timeZone: 'America/Mexico_City'
+    });
+
+    /* ------------------------------------------------------------------
+       PASO 2: CONSULTAR DIRECTAMENTE EL MODELO ActividadesSchema
+    ------------------------------------------------------------------ */
+
+    const documentoUsuario = await ActividadesSchema.findOne({ odooUserId });
+
+    if (!documentoUsuario) {
+      return res.status(404).json({
+        success: false,
+        message: "No se encontró información del usuario en la base de datos"
+      });
+    }
+
+    /* ------------------------------------------------------------------
+       PASO 3: FILTRAR ACTIVIDADES DEL DÍA DE HOY
+    ------------------------------------------------------------------ */
+
+    const actividadesDeHoy = documentoUsuario.actividades?.filter(
+      act => act.fecha === today
+    ) || [];
+
+    if (actividadesDeHoy.length === 0) {
+      return res.json({
+        success: true,
+        answer: "No tienes actividades registradas para hoy en la base de datos.",
+        sessionId,
+        actividades: [],
+        revisionesPorActividad: {}
+      });
+    }
+
+    /* ------------------------------------------------------------------
+       PASO 4: APLICAR FILTROS (FTF, 00sec, horario laboral)
+    ------------------------------------------------------------------ */
+
+    const HORARIO_INICIO_LABORAL = 9.0;
+    const HORARIO_FIN_LABORAL = 18.0;
+
+    const actividadesFiltradas = actividadesDeHoy.filter(act => {
+      const tituloLower = act.titulo?.toLowerCase() || '';
+      const horaInicio = convertirHoraADecimal(act.horaInicio);
+      const horaFin = convertirHoraADecimal(act.horaFin);
+
+      if (tituloLower.includes('ftf')) return false;
+      if (tituloLower.includes('00sec') || act.status === '00sec') return false;
+      if (horaInicio < HORARIO_INICIO_LABORAL) return false;
+      if (horaFin > HORARIO_FIN_LABORAL) return false;
+
+      return true;
+    });
+
+    if (actividadesFiltradas.length === 0) {
+      return res.json({
+        success: true,
+        answer: "No tienes actividades en horario laboral (9am-6pm) para hoy.",
+        sessionId,
+        actividades: [],
+        revisionesPorActividad: {}
+      });
+    }
+
+    /* ------------------------------------------------------------------
+       PASO 5: CONSTRUIR revisionesPorActividad DESDE LOS PENDIENTES GUARDADOS
+    ------------------------------------------------------------------ */
+
+    const hoyMexico = today;
+    const revisionesPorActividad = {};
+    const todosColaboradoresSet = new Set();
+
+    let totalTareasConTiempo = 0;
+    let totalTareasSinTiempo = 0;
+    let tareasAltaPrioridad = 0;
+    let tiempoTotalEstimado = 0;
+
+    actividadesFiltradas.forEach(actividad => {
+      const colaboradoresNombres = (actividad.colaboradores || []).map(c =>
+        limpiarNombreColaborador(c)
+      );
+      colaboradoresNombres.forEach(c => todosColaboradoresSet.add(c));
+
+      const pendientesConTiempo = [];
+      const pendientesSinTiempo = [];
+
+      (actividad.pendientes || []).forEach(p => {
+        // Filtrar pendientes futuros
+        const fechaPendiente = p.fechaCreacion
+          ? new Date(p.fechaCreacion).toLocaleDateString('sv-SE', {
+            timeZone: 'America/Mexico_City'
+          })
+          : null;
+
+        if (fechaPendiente && fechaPendiente > hoyMexico) return;
+
+        const diasPendiente = p.fechaCreacion
+          ? Math.floor((new Date() - new Date(p.fechaCreacion)) / (1000 * 60 * 60 * 24))
+          : 0;
+
+        const pendienteInfo = {
+          id: p.pendienteId,
+          nombre: p.nombre,
+          descripcion: p.descripcion || "",
+          queHizo: p.queHizo || "",
+          terminada: p.terminada,
+          confirmada: p.confirmada,
+          duracionMin: p.duracionMin || 0,
+          fechaCreacion: p.fechaCreacion,
+          fechaFinTerminada: p.fechaFinTerminada,
+          diasPendiente,
+          colaboradores: (p.colaboradores || []).map(c => limpiarNombreColaborador(c)),
+          colaboradoresEmails: p.colaboradores || []
+        };
+
+        if (p.duracionMin && p.duracionMin > 0) {
+          pendienteInfo.prioridad = p.duracionMin > 60 ? "ALTA" :
+            p.duracionMin > 30 ? "MEDIA" : "BAJA";
+          pendientesConTiempo.push(pendienteInfo);
+          tiempoTotalEstimado += p.duracionMin;
+          if (pendienteInfo.prioridad === "ALTA") tareasAltaPrioridad++;
+        } else {
+          pendienteInfo.prioridad = "SIN TIEMPO";
+          pendientesSinTiempo.push(pendienteInfo);
+        }
+      });
+
+      totalTareasConTiempo += pendientesConTiempo.length;
+      totalTareasSinTiempo += pendientesSinTiempo.length;
+
+      revisionesPorActividad[actividad.actividadId] = {
+        actividad: {
+          id: actividad.actividadId,
+          titulo: actividad.titulo,
+          horaInicio: actividad.horaInicio,
+          horaFin: actividad.horaFin,
+          status: actividad.status,
+          proyecto: actividad.tituloProyecto || "Sin proyecto",
+          colaboradores: colaboradoresNombres,
+          colaboradoresEmails: actividad.colaboradores || [],
+          assigneesOriginales: actividad.assigneesOriginales || [],
+          tipo: colaboradoresNombres.length > 1 ? "colaborativa" : "individual"
+        },
+        pendientesConTiempo,
+        pendientesSinTiempo
+      };
+    });
+
+    const horasTotales = Math.floor(tiempoTotalEstimado / 60);
+    const minutosTotales = tiempoTotalEstimado % 60;
+    const colaboradoresTotales = Array.from(todosColaboradoresSet);
+
+    /* ------------------------------------------------------------------
+       PASO 6: REUTILIZAR ANÁLISIS GUARDADO O GENERAR UNO NUEVO
+    ------------------------------------------------------------------ */
+
+    let aiResult;
+
+    if (documentoUsuario?.analisisGuardado?.vigente) {
+      aiResult = {
+        text: documentoUsuario.analisisGuardado.respuesta,
+        provider: documentoUsuario.analisisGuardado.provider
+      };
+    } else {
+      const promptGenerado = `
+Eres un asistente que analiza actividades del día.
+
+Usuario: ${email}
+
+RESUMEN:
+- Total actividades: ${actividadesFiltradas.length}
+- Tareas con tiempo: ${totalTareasConTiempo}
+- Tareas sin tiempo: ${totalTareasSinTiempo}
+- Alta prioridad: ${tareasAltaPrioridad}
+- Tiempo estimado: ${horasTotales}h ${minutosTotales}m
+- Colaboradores: ${colaboradoresTotales.join(', ') || 'Ninguno'}
+
+ACTIVIDADES:
+${actividadesFiltradas.map((act, i) => {
+        const rev = revisionesPorActividad[act.actividadId];
+        return `${i + 1}. ${act.horaInicio} - ${act.horaFin} | ${act.titulo}
+   • Proyecto: ${rev.actividad.proyecto}
+   • Tareas: ${rev.pendientesConTiempo.length} con tiempo, ${rev.pendientesSinTiempo.length} sin tiempo`;
+      }).join('\n')}
+
+INSTRUCCIONES: Resumen general, destaca alta prioridad, sugiere orden. MÁXIMO 8 renglones.
+`.trim();
+
+      aiResult = await smartAICall(promptGenerado);
+
+      await ActividadesSchema.findOneAndUpdate(
+        { odooUserId },
+        {
+          $set: {
+            'analisisGuardado.respuesta': aiResult.text,
+            'analisisGuardado.provider': aiResult.provider,
+            'analisisGuardado.fechaGeneracion': new Date(),
+            'analisisGuardado.vigente': true
+          }
+        }
+      );
+    }
+
+    /* ------------------------------------------------------------------
+       PASO 7: CONSTRUIR RESPUESTA
+    ------------------------------------------------------------------ */
+
+    const respuestaData = {
+      actividades: actividadesFiltradas.map(act => {
+        const rev = revisionesPorActividad[act.actividadId];
+        return {
+          id: act.actividadId,
+          titulo: act.titulo,
+          horario: `${act.horaInicio} - ${act.horaFin}`,
+          status: act.status,
+          proyecto: rev.actividad.proyecto,
+          colaboradores: rev.actividad.colaboradores,
+          tipo: rev.actividad.tipo,
+          totalPendientes: rev.pendientesConTiempo.length + rev.pendientesSinTiempo.length,
+          tieneRevisionesConTiempo: rev.pendientesConTiempo.length > 0
+        };
+      }),
+      revisionesPorActividad: actividadesFiltradas.map(act => {
+        const rev = revisionesPorActividad[act.actividadId];
+        const todasLasTareas = [...rev.pendientesConTiempo, ...rev.pendientesSinTiempo];
+        return {
+          actividadId: act.actividadId,
+          actividadTitulo: act.titulo,
+          actividadHorario: `${act.horaInicio} - ${act.horaFin}`,
+          colaboradores: rev.actividad.colaboradores,
+          tipo: rev.actividad.tipo,
+          tareas: todasLasTareas,
+          tareasConTiempo: rev.pendientesConTiempo,
+          tareasSinTiempo: rev.pendientesSinTiempo,
+          totalTareasConTiempo: rev.pendientesConTiempo.length,
+          totalTareasSinTiempo: rev.pendientesSinTiempo.length,
+          tareasAltaPrioridad: rev.pendientesConTiempo.filter(t => t.prioridad === "ALTA").length,
+          tiempoTotal: rev.pendientesConTiempo.reduce((sum, t) => sum + t.duracionMin, 0),
+          tiempoFormateado: `${Math.floor(rev.pendientesConTiempo.reduce((sum, t) => sum + t.duracionMin, 0) / 60)}h ${rev.pendientesConTiempo.reduce((sum, t) => sum + t.duracionMin, 0) % 60}m`
+        };
+      })
+    };
+
+    return res.json({
+      success: true,
+      answer: aiResult.text,
+      provider: aiResult.provider,
+      sessionId,
+      analisisReutilizado,
+      fuenteDatos: "base_de_datos_local",
+      metrics: {
+        totalActividades: actividadesFiltradas.length,
+        tareasConTiempo: totalTareasConTiempo,
+        tareasSinTiempo: totalTareasSinTiempo,
+        tareasAltaPrioridad,
+        tiempoEstimadoTotal: `${horasTotales}h ${minutosTotales}m`,
+        totalColaboradores: colaboradoresTotales.length
+      },
+      data: respuestaData,
+      colaboradoresTotales,
+      filtrosAplicados: {
+        excluirFTF: true,
+        excluir00sec: true,
+        horarioLaboral: "09:00 - 18:00",
+        fecha: today
+      }
+    });
+
+  } catch (error) {
+    console.error("Error en getActividadesDesdeDB:", error);
+
+    if (error.message === "AI_PROVIDER_FAILED") {
+      return res.status(503).json({
+        success: false,
+        message: "El asistente está muy ocupado. Intenta de nuevo en un minuto."
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: "Error interno",
+      error: error.message
     });
   }
 }

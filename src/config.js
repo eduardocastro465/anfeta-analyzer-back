@@ -20,3 +20,6 @@ export const TOKEN_SECRET = process.env.TOKEN_SECRET;
 export const JWT_SECRET = process.env.JWT_SECRET;
 
 export const API_URL_ANFETA = process.env.API_URL_ANFETA || "https://wlserver-production-6735.up.railway.app/api";
+
+export const ANFETA_SHARED_USER = process.env.ANFETA_SHARED_USER;
+export const ANFETA_SHARED_PASS = process.env.ANFETA_SHARED_PASS;

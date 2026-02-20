@@ -1,7 +1,37 @@
 import jwt from "jsonwebtoken";
-import { TOKEN_SECRET } from "../config.js";
+// import axios from "axios";
+import {
+  TOKEN_SECRET,
+  // API_URL_ANFETA, ANFETA_SHARED_USER, ANFETA_SHARED_PASS,
+} from "../config.js";
 import { createAccessToken } from "../libs/jwt.js";
 import { getAllUsers } from "./users.controller.js";
+
+// export const getAnfetaToken = async (req, res) => {
+//   const { token } = req.cookies;
+
+//   if (!token) return res.sendStatus(401);
+
+//   console.log(ANFETA_SHARED_USER, ANFETA_SHARED_PASS)
+
+//   jwt.verify(token, TOKEN_SECRET, async (error, user) => {
+//     if (error) return res.sendStatus(401);
+
+//     try {
+//       const response = await axios.post(
+//         `${API_URL_ANFETA}/shared-auth/login`,
+//         {
+//           user: ANFETA_SHARED_USER,
+//           pass: ANFETA_SHARED_PASS
+//         }
+//       );
+//       return res.json({ token: response.data.token });
+//     } catch (err) {
+//       console.error("Error al obtener token de Anfeta:", err);
+//       return res.status(500).json({ message: "No se pudo obtener token de Anfeta" });
+//     }
+//   });
+// };
 
 export const signIn = async (req, res) => {
   try {
@@ -17,6 +47,15 @@ export const signIn = async (req, res) => {
         message: ["El usuario no existe"]
       });
     }
+
+    // const response = await axios.post(
+    //   `${API_URL_ANFETA}/shared-auth/login`,
+    //   {
+    //     user: ANFETA_SHARED_USER,
+    //     pass: ANFETA_SHARED_PASS
+    //   }
+    // );
+
 
     const token = await createAccessToken({
       id: userFound.id,
@@ -40,6 +79,7 @@ export const signIn = async (req, res) => {
       id: userFound.collaboratorId,
       username: userFound.firstName,
       email: userFound.email,
+      // anfetaToken: response.data.token
     });
   } catch (error) {
     console.error("Error en signIn:", error);
