@@ -895,7 +895,7 @@ RESPONDE SOLO EL TITULO
       odooUserId: odooUserId
     });
 
-    const actividadesParaGuardar = actividadesEnHorarioLaboral.map(actividad => {
+    const actividadesParaGuardar = actividadesFinales.map(actividad => {
       const revisiones = revisionesPorActividad[actividad.id] || {
         pendientesConTiempo: [],
         pendientesSinTiempo: []
