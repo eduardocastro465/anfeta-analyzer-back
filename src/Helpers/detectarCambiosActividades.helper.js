@@ -1,27 +1,7 @@
-/**
- * ============================================================================
- * SISTEMA DE DETECCIÓN Y SINCRONIZACIÓN DE CAMBIOS EN ACTIVIDADES
- * ============================================================================
- * 
- * Detecta y sincroniza cambios desde la API hacia la BD local:
- * 1. Actividades/pendientes nuevos → Agregar
- * 2. Pendientes eliminados → Eliminar de BD
- * 3. Pendientes reasignados a otro día → Eliminar de BD
- * 4. Pendientes actualizados → Actualizar campos seguros
- * 
- * PROTEGE:
- * - Explicaciones de voz (descripcion, queHizo)
- * - Historial de explicaciones
- * - Validaciones de IA
- */
-
 import axios from 'axios';
 import ActividadesSchema from '../models/actividades.model.js';
 import { API_URL_ANFETA } from '../config.js';
 
-/**
- * Función principal: Detectar y sincronizar cambios
- */
 export async function detectarYSincronizarCambios(odooUserId, email) {
   try {
     console.log(`🔍 Iniciando detección de cambios para usuario: ${email}`);

@@ -99,6 +99,8 @@ const actividadSchema = new mongoose.Schema(
     pendientes: [pendienteSchema],
     ultimaActualizacion: { type: Date, default: Date.now },
 
+    colaboradoresEmails: [String],
+    IdColaboradoresEmails: [String],
     // 🔥 NUEVOS CAMPOS PARA VOZ
     actualizadoPor: String, // Email del usuario que actualizó
     fechaRevisionVoz: Date,
@@ -128,10 +130,9 @@ const actividadesSchema = new mongoose.Schema(
     odooUserId: { type: String, required: true },
     emailUsuario: String, // Email principal del usuario
     nombreUsuario: String, // Nombre completo
-
     actividades: [actividadSchema],
     ultimaSincronizacion: { type: Date, default: Date.now },
-
+    ultimaConsultaDia: { type: Date, default: null },
     analisisGuardado: {
       prompt: String,
       respuesta: String,
@@ -140,8 +141,6 @@ const actividadesSchema = new mongoose.Schema(
       fechaGeneracion: Date,
       vigente: { type: Boolean, default: true }
     },
-
-
     // 🔥 METADATOS GLOBALES DE VOZ
     fechaPrimeraExplicacion: Date,
     fechaUltimaExplicacion: Date,

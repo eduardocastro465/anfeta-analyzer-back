@@ -343,37 +343,49 @@ function construirMensajeCambios(cambiosDetectados, revisionesPorActividad) {
 export async function getActividadesConRevisiones(req, res) {
   try {
     const {
-      email,
       question = "¿Qué actividades y revisiones tengo hoy? ¿Qué me recomiendas priorizar?",
       showAll = false
     } = sanitizeObject(req.body);
 
-    if (!email) {
+
+
+    const { token } = req.cookies;
+
+    if (!token) {
       return res.status(400).json({
         success: false,
-        message: "El email es requerido"
+        message: "El token es requerido"
       });
     }
+
 
     /* ------------------------------------------------------------------
        PASO 1: OBTENER DATOS DE USUARIO Y SESIÓN
     ------------------------------------------------------------------ */
 
-    const usersData = await getAllUsers();
-    const user = usersData.items.find(
-      (u) => u.email.toLowerCase() === email.toLowerCase()
-    );
-
-    if (!user) {
-      return res.status(404).json({ error: 'Usuario no encontrado' });
-    }
-
-    const { token } = req.cookies;
     const decoded = jwt.verify(token, TOKEN_SECRET);
     const odooUserId = decoded.id;
+    const username = decoded.username;
+    const email = decoded.email;
     const sessionId = await obtenerSesionActivaDelDia(odooUserId);
 
-    const today = new Date().toISOString().split('T')[0];
+    const today = new Date().toLocaleDateString('sv-SE', {
+      timeZone: 'America/Mexico_City'
+    });
+
+
+    const documentoExistente = await ActividadesSchema.findOne({ odooUserId });
+    const inicioDiaHoy = new Date();
+    inicioDiaHoy.setHours(0, 0, 0, 0);
+    const esPrimeraConsultaDelDia = !documentoExistente?.ultimaSincronizacion
+      || documentoExistente.ultimaSincronizacion < inicioDiaHoy;
+
+    console.log(`📅 Primera consulta del día [${email}]:`, esPrimeraConsultaDelDia);
+
+
+    if (!esPrimeraConsultaDelDia) {
+      return getActividadesDesdeDB(req, res);
+    }
 
     /* ------------------------------------------------------------------
        PASO 2: OBTENER ACTIVIDADES DEL DÍA PARA EL COLABORADOR
@@ -634,12 +646,6 @@ export async function getActividadesConRevisiones(req, res) {
         console.log("   - Hash guardado:", documentoUsuario.analisisGuardado.hashActividades);
       }
 
-      const cambiosDetectados = await detectarCambiosEnRevisiones(
-        odooUserId,
-        actividadesFinales,
-        sessionId
-      );
-
       let mensajeAdicionalCambios = "";
       if (cambiosDetectados.cambiosDetectados && !cambiosDetectados.esPrimeraVez) {
         mensajeAdicionalCambios = construirMensajeCambios(cambiosDetectados, revisionesPorActividad);
@@ -648,7 +654,7 @@ export async function getActividadesConRevisiones(req, res) {
       promptGenerado = `
 Eres un asistente que analiza actividades del día.
 
-Usuario: ${user.firstName} (${email})
+Usuario: ${username} (${email})
 
 ${mensajeAdicionalCambios}
 
@@ -709,10 +715,7 @@ INSTRUCCIONES DE RESPUESTA:
 
 EJEMPLO FORMATO:
 "6 pendientes, ~4h con Nnico.
-
-Prioriza rutas back
-y reporte vespertino.
-
+prioriza 1 o 2
 Sin pendientes urgentes."
 `.trim();
 
@@ -738,11 +741,6 @@ Sin pendientes urgentes."
     const horasTotalesFinal = Math.floor(tiempoTotalEstimado / 60);
     const minutosTotalesFinal = tiempoTotalEstimado % 60;
 
-    const cambiosDetectados = await detectarCambiosEnRevisiones(
-      odooUserId,
-      actividadesFinales,
-      sessionId
-    );
 
     const actividadesGuardadas = await ActividadesSchema.findOne({ odooUserId: odooUserId });
 
@@ -1324,15 +1322,17 @@ ${index + 1}. ${actividad.titulo}
 
 PREGUNTA DEL USUARIO: "${question}"
 
+EJEMPLO DE FORMATO ESPERADO:
 INSTRUCCIONES DE RESPUESTA:
-1. COMIENZA con: "Hoy has terminado ${totalTareasTerminadas} tareas, de las cuales ${totalTareasConfirmadas} están confirmadas."
-2. MENCIONA el tiempo total trabajado: ${horasTotales}h ${minutosTotales}m
-3. DESTACA las tareas CONFIRMADAS vs POR CONFIRMAR
-4. Si hay muchas tareas por confirmar, sugiere revisarlas
-5. RECONOCE el progreso del usuario
-6. MENCIONA la colaboración con otros si aplica
-7. MÁXIMO 6-8 renglones
-8. TONO positivo y motivacional
+1. EXACTAMENTE 3 o 4 párrafos
+2. MÁXIMO 26 caracteres por párrafo en total
+3. Sin títulos ni secciones
+4. Directo y conciso
+
+EJEMPLO FORMATO:
+"6 pendientes, ~4h con Nnico.
+prioriza 1 o 2
+Sin pendientes urgentes."
 `.trim();
 
     const aiResult = await smartAICall(prompt);
@@ -1713,33 +1713,45 @@ export async function validarYGuardarExplicacion(req, res) {
 
     // Validar con IA
     const prompt = `
-Tu tarea es evaluar si la explicación del usuario corresponde, por INTENCIÓN GENERAL, al pendiente asignado.
+Eres un sistema de validación estricto.
 
-CONTEXTO:
-El usuario está explicando qué hará durante el pendiente.
-ACTIVIDAD:
-"${actividadTitulo}"
+Tu tarea es determinar si una explicación corresponde de forma directa, específica y clara al pendiente indicado.
 
-PENDIENTE:
-"${nombrePendiente}"
+CONTEXTO: El usuario está explicando qué hará durante el pendiente. ACTIVIDAD: "${actividadTitulo}" 
+PENDIENTE: "${nombrePendiente}" 
+EXPLICACIÓN: "${explicacion}" 
+TIEMPO: ${duracionMin || duration || "No especificado"}
 
-EXPLICACIÓN:
-"${explicacion}"
+Criterios obligatorios:
 
-TIEMPO:
-${duracionMin || duration || "No especificado"}
+La explicación debe describir una acción concreta relacionada directamente con el pendiente.
 
-Reglas:
-- La explicación proviene de VOZ A TEXTO y puede contener errores graves de pronunciación, palabras incorrectas o frases sin sentido literal.
-- Debes evaluar la INTENCIÓN, no la redacción exacta.
-- Acepta sinónimos, palabras mal reconocidas y referencias indirectas.
-- esValida = true SOLO si la explicación está relacionada con el pendiente.
-- No inventes información.
+Debe existir correspondencia semántica específica, no solo palabras similares.
 
-Responde ÚNICAMENTE en JSON:
+No aceptes explicaciones genéricas que puedan aplicar a múltiples pendientes distintos.
+
+No aceptes frases vagas como:
+
+"Revisión general"
+
+"Actualización"
+
+"Se trabajó en ello"
+
+"Pendiente atendido"
+
+Si la explicación es ambigua, incompleta o demasiado general, es inválida.
+
+No asumas intención correcta si no está explícitamente descrita.
+
+Regla clave:
+Si la explicación podría aplicarse a otro pendiente diferente sin cambiar el texto, entonces es inválida.
+
+Responde exclusivamente en formato JSON:
+
 {
-  "esValida": boolean,
-  "razon": string
+"esValida": boolean,
+"razon": "explicación breve y técnica de la decisión"
 }
 `;
 
@@ -1753,7 +1765,11 @@ Responde ÚNICAMENTE en JSON:
       });
     }
 
+    console.log(aiResult)
     const aiEvaluation = parseAIJSONSafe(aiResult.text);
+
+    console.log(aiEvaluation)
+
 
     if (!aiEvaluation.esValida) {
       return res.status(200).json({
@@ -2947,198 +2963,54 @@ export async function guardarExplicacionesTarde(req, res) {
     }
 
     // ==================== ANÁLISIS CON IA (UNA SOLA VEZ) ====================
-    const prompt = `Eres un asistente experto en análisis de reportes laborales. Analiza el siguiente reporte de trabajo y determina si la tarea se completó exitosamente.
+    const prompt = `
+  Eres un evaluador estricto de reportes laborales.
 
-═══════════════════════════════════════════════════════════════════════════════
-INFORMACIÓN DE LA TAREA
-═══════════════════════════════════════════════════════════════════════════════
-NOMBRE: "${primerPendiente.nombre}"
-DESCRIPCIÓN ORIGINAL: "${primerPendiente.descripcion || 'Sin descripción previa'}"
-REPORTE DEL USUARIO: "${queHizo}"
+Determina si la tarea fue completada basándote únicamente en el contenido del reporte.
 
-═══════════════════════════════════════════════════════════════════════════════
-REGLAS DE EVALUACIÓN
-═══════════════════════════════════════════════════════════════════════════════
+Pendiente:
+"${nombre}"
 
-1️⃣ CRITERIOS PARA MARCAR COMO COMPLETADA (true)
-   ✅ El usuario describe trabajo CONCRETO y FINALIZADO
-   ✅ Menciona resultados verificables o funcionales
-   ✅ Usa verbos en PASADO que indican finalización:
-      • "Terminé", "Completé", "Finalicé", "Implementé"
-      • "Corregí", "Arreglé", "Optimicé", "Creé"
-      • "Ya quedó", "Está listo", "Funciona correctamente"
-   ✅ Describe pruebas exitosas:
-      • "Lo probé y funciona"
-      • "Validé que está funcionando"
-      • "Ya está en producción"
-   ✅ Menciona entregables tangibles:
-      • "Subí el código", "Hice el deploy"
-      • "Envié el reporte", "Documenté el proceso"
+Descripción:
+"${descripcion}"
 
-2️⃣ CRITERIOS PARA MARCAR COMO NO COMPLETADA (false)
-   ❌ El usuario indica explícitamente que NO terminó
-   ❌ Menciona BLOQUEOS o PROBLEMAS sin resolver
-   ❌ Usa verbos que indican intento sin éxito:
-      • "Intenté pero...", "Traté de..."
-      • "Empecé pero...", "Iba a hacer pero..."
-   ❌ Menciona PENDIENTES explícitos:
-      • "Falta", "Aún no", "Todavía no"
-      • "Quedó pendiente", "No lo logré"
-   ❌ Describe bloqueos o dependencias:
-      • "Esperando aprobación/información/acceso"
-      • "No tengo permisos/credenciales"
-      • "Bloqueado por otra tarea/persona"
-   ❌ Avance parcial SIN entregable funcional:
-      • "Hice la mitad", "Avancé un 50%"
-      • "Solo preparé el ambiente"
+Reporte:
+"${queHizo}"
 
-3️⃣ CASOS ESPECIALES Y GRISES
-   🔸 Investigación/Análisis SIN código:
-      • Si describe hallazgos concretos → COMPLETADA
-      • Si solo dice "investigué un poco" → NO COMPLETADA
+Reglas:
 
-   🔸 Trabajo técnico detallado:
-      • Si menciona cambios específicos en archivos/código → COMPLETADA
-      • Si describe arquitectura/diseño implementado → COMPLETADA
-      • Si solo menciona "trabajé en..." sin detalles → NO COMPLETADA
+Solo marca como completada si describe trabajo concreto y finalizado.
 
-   🔸 Correcciones/Bugfixes:
-      • Si confirma que el bug está resuelto → COMPLETADA
-      • Si solo identificó el problema → NO COMPLETADA
+Rechaza reportes vagos, ambiguos o genéricos.
 
-   🔸 Meetings/Reuniones:
-      • Si tomó decisiones/acuerdos concretos → COMPLETADA
-      • Si solo asistió sin conclusiones → NO COMPLETADA
+Si podría aplicar a cualquier otra tarea, es inválido.
 
-   🔸 ⚠️ IMPORTANTE - Lenguaje coloquial/informal (voz a texto):
-      • "lo que hicimos fue verificar X y documentar Y" → EVALÚA EL CONTENIDO, no el estilo
-      • Si el resultado final fue logrado (aunque lo digan informalmente) → COMPLETADA
-      • Muletillas como "básicamente", "o sea", "este" NO penalizan si el contenido es claro
-      • "empezamos a documentar en Word" con resultado guardado → COMPLETADA
+No asumas intención.
 
-4️⃣ EXTRACCIÓN DEL MOTIVO (si NO está completada)
-   📌 IMPORTANTE: Identifica la razón ESPECÍFICA del no-completado
+Evalúa contenido, no estilo.
 
-   Categorías de motivos:
-   • Bloqueo técnico: "No tenía acceso al servidor X"
-   • Bloqueo externo: "Esperando aprobación de cliente/gerencia"
-   • Falta información: "Falta especificación del diseño"
-   • Dependencia: "Bloqueado por tarea Y pendiente"
-   • Problema técnico: "Error en API externa sin resolver"
-   • Falta recursos: "No tengo permisos/credenciales necesarios"
-   • Priorización: "Se priorizó otra tarea más urgente"
-   • Default: "No especificó el motivo" (solo si no hay ninguna pista)
+Responde exclusivamente con un JSON válido.
+No agregues texto fuera del JSON.
+No uses markdown.
+No incluyas explicaciones adicionales.
 
-   FORMATO: Máximo 100 caracteres, frase clara y específica
-
-5️⃣ EVALUACIÓN DE CALIDAD (0-100)
-   90-100 pts: Explicación detallada con:
-      • Verbos de acción específicos
-      • Resultados medibles/verificables
-      • Menciona archivos/componentes/funcionalidades concretas
-      • Describe el impacto o beneficio logrado
-
-   70-89 pts: Explicación clara con:
-      • Describe qué se hizo
-      • Menciona algunos detalles técnicos
-      • Falta profundidad o contexto completo
-
-   50-69 pts: Explicación vaga con:
-      • Descripción general sin detalles
-      • Usa muletillas ("este", "pues", "entonces")
-      • No menciona resultados concretos
-
-   0-49 pts: Explicación muy pobre:
-      • Solo dice "lo hice" sin explicar
-      • Texto muy corto (<20 caracteres)
-      • No aporta información útil
-
-6️⃣ DETECCIÓN DE RESPUESTAS INVÁLIDAS
-   ⚠️ Si el reporte contiene SOLO estas frases, márcalo como NO COMPLETADA con baja calidad:
-   • "ok", "sí", "no", "bien", "gracias"
-   • "listo", "perfecto", "entendido"
-   • Menos de 3 palabras
-   • Solo muletillas sin contenido
-
-═══════════════════════════════════════════════════════════════════════════════
-INSTRUCCIONES DE RESPUESTA
-═══════════════════════════════════════════════════════════════════════════════
-
-Analiza el reporte cuidadosamente y responde ÚNICAMENTE en formato JSON:
+Formato exacto:
 
 {
-  "completada": boolean,
-  "confianza": number (0.0 a 1.0),
-  "razon": "Explicación breve de tu evaluación (máx 200 caracteres)",
-  "evidencias": ["frase clave 1", "frase clave 2", "frase clave 3"],
-  "calidadExplicacion": number (0 a 100),
-  "feedbackMejora": "Sugerencia constructiva para mejorar el reporte (o vacío si está excelente)",
-  "motivoNoCompletado": "Motivo específico si false, o null si true"
+"completada": boolean,
+"razon": string,
+"calidad": number,
+"motivoNoCompletado": string|null
 }
 
-═══════════════════════════════════════════════════════════════════════════════
-EJEMPLOS DE ANÁLISIS
-═══════════════════════════════════════════════════════════════════════════════
+Si no puedes evaluar, devuelve:
 
-EJEMPLO 1 - COMPLETADA:
-Reporte: "Implementé la validación de formularios en el componente LoginForm.tsx. Agregué Zod para el schema y ahora valida email, contraseña (mínimo 8 caracteres) y muestra errores en tiempo real. Lo probé y funciona correctamente."
-
-Respuesta:
 {
-  "completada": true,
-  "confianza": 0.95,
-  "razon": "Describe implementación completa con detalles técnicos específicos y validación exitosa",
-  "evidencias": ["Implementé la validación", "Agregué Zod", "Lo probé y funciona correctamente"],
-  "calidadExplicacion": 92,
-  "feedbackMejora": "",
-  "motivoNoCompletado": null
-}
-
-EJEMPLO 2 - NO COMPLETADA:
-Reporte: "Intenté conectar con la API de pagos pero no tengo las credenciales de producción. Quedó pendiente hasta que el cliente las proporcione."
-
-Respuesta:
-{
-  "completada": false,
-  "confianza": 0.9,
-  "razon": "Bloqueado por falta de credenciales externas",
-  "evidencias": ["no tengo las credenciales", "Quedó pendiente"],
-  "calidadExplicacion": 75,
-  "feedbackMejora": "Menciona qué pasos alternativos tomaste mientras esperas las credenciales",
-  "motivoNoCompletado": "Falta credenciales de producción del cliente"
-}
-
-EJEMPLO 3 - REPORTE INFORMAL/VOZ (COMPLETADA):
-Reporte: "Bueno, lo que hicimos básicamente fue, pues, ya sabes, verificamos la información disponible, igual documentamos lo que viene siendo la parte del proyecto y eso, empezamos a documentar en un archivo en Word."
-
-Respuesta:
-{
-  "completada": true,
-  "confianza": 0.78,
-  "razon": "Describe verificación de información y documentación en Word completadas, aunque con lenguaje informal",
-  "evidencias": ["verificamos la información disponible", "documentamos", "documentar en un archivo en Word"],
-  "calidadExplicacion": 55,
-  "feedbackMejora": "Especifica qué información verificaste y qué contenido documentaste en Word",
-  "motivoNoCompletado": null
-}
-
-EJEMPLO 4 - RESPUESTA INVÁLIDA:
-Reporte: "Gracias."
-
-Respuesta:
-{
-  "completada": false,
-  "confianza": 0.95,
-  "razon": "Respuesta inválida: no describe trabajo realizado",
-  "evidencias": [],
-  "calidadExplicacion": 5,
-  "feedbackMejora": "Por favor describe específicamente qué trabajo realizaste en esta tarea",
-  "motivoNoCompletado": "No proporcionó explicación válida"
-}
-
-═══════════════════════════════════════════════════════════════════════════════
-
-AHORA ANALIZA EL REPORTE PROPORCIONADO Y RESPONDE EN JSON:`;
+"completada": false,
+"razon": "No se pudo evaluar",
+"calidad": 0,
+"motivoNoCompletado": "Error de análisis"
+}`;
 
     const aiResult = await smartAICall(prompt);
 
@@ -3865,7 +3737,7 @@ export async function getActividadesDesdeDB(req, res) {
     }
 
     const decoded = jwt.verify(token, TOKEN_SECRET);
-    const { id: odooUserId } = decoded;
+    const { id: odooUserId, email } = decoded;
 
     const sessionId = await obtenerSesionActivaDelDia(odooUserId);
 
@@ -3877,7 +3749,7 @@ export async function getActividadesDesdeDB(req, res) {
        PASO 2: CONSULTAR DIRECTAMENTE EL MODELO ActividadesSchema
     ------------------------------------------------------------------ */
 
-    const documentoUsuario = await ActividadesSchema.findOne({ odooUserId });
+    const documentoUsuario = await ActividadesSchema.findOne({ odooUserId }).lean();
 
     if (!documentoUsuario) {
       return res.status(404).json({
@@ -3948,7 +3820,7 @@ export async function getActividadesDesdeDB(req, res) {
     let tiempoTotalEstimado = 0;
 
     actividadesFiltradas.forEach(actividad => {
-      const colaboradoresNombres = (actividad.colaboradores || []).map(c =>
+      const colaboradoresNombres = (actividad.colaboradoresEmails || actividad.colaboradores || []).map(c =>
         limpiarNombreColaborador(c)
       );
       colaboradoresNombres.forEach(c => todosColaboradoresSet.add(c));
@@ -3982,7 +3854,14 @@ export async function getActividadesDesdeDB(req, res) {
           fechaFinTerminada: p.fechaFinTerminada,
           diasPendiente,
           colaboradores: (p.colaboradores || []).map(c => limpiarNombreColaborador(c)),
-          colaboradoresEmails: p.colaboradores || []
+          colaboradoresEmails: p.colaboradores || [],
+          reportada: p.terminada || p.confirmada || false,
+          explicacionVoz: p.explicacionVoz ? {
+            emailUsuario: p.explicacionVoz.emailUsuario,
+            fechaRegistro: p.explicacionVoz.fechaRegistro,
+            validadaPorIA: p.explicacionVoz.validadaPorIA,
+            razonIA: p.explicacionVoz.razonIA
+          } : null
         };
 
         if (p.duracionMin && p.duracionMin > 0) {
@@ -4009,7 +3888,7 @@ export async function getActividadesDesdeDB(req, res) {
           status: actividad.status,
           proyecto: actividad.tituloProyecto || "Sin proyecto",
           colaboradores: colaboradoresNombres,
-          colaboradoresEmails: actividad.colaboradores || [],
+          colaboradoresEmails: actividad.colaboradoresEmails || [],
           assigneesOriginales: actividad.assigneesOriginales || [],
           tipo: colaboradoresNombres.length > 1 ? "colaborativa" : "individual"
         },
@@ -4027,13 +3906,19 @@ export async function getActividadesDesdeDB(req, res) {
     ------------------------------------------------------------------ */
 
     let aiResult;
+    let analisisReutilizado = false;
+
+    console.log("Es vigente" + documentoUsuario?.analisisGuardado?.vigente)
 
     if (documentoUsuario?.analisisGuardado?.vigente) {
+      console.log("reutilizando el resumen en la base")
       aiResult = {
         text: documentoUsuario.analisisGuardado.respuesta,
         provider: documentoUsuario.analisisGuardado.provider
       };
+      analisisReutilizado = true;
     } else {
+      console.log("generando resumen")
       const promptGenerado = `
 Eres un asistente que analiza actividades del día.
 
@@ -4055,7 +3940,17 @@ ${actividadesFiltradas.map((act, i) => {
    • Tareas: ${rev.pendientesConTiempo.length} con tiempo, ${rev.pendientesSinTiempo.length} sin tiempo`;
       }).join('\n')}
 
-INSTRUCCIONES: Resumen general, destaca alta prioridad, sugiere orden. MÁXIMO 8 renglones.
+EJEMPLO DE FORMATO ESPERADO:
+INSTRUCCIONES DE RESPUESTA:
+1. EXACTAMENTE 3 o 4 párrafos
+2. MÁXIMO 26 caracteres por párrafo en total
+3. Sin títulos ni secciones
+4. Directo y conciso
+
+EJEMPLO FORMATO:
+"6 pendientes, ~4h con Nnico.
+prioriza 1 o 2
+Sin pendientes urgentes."
 `.trim();
 
       aiResult = await smartAICall(promptGenerado);
@@ -4123,7 +4018,6 @@ INSTRUCCIONES: Resumen general, destaca alta prioridad, sugiere orden. MÁXIMO 8
       metrics: {
         totalActividades: actividadesFiltradas.length,
         tareasConTiempo: totalTareasConTiempo,
-        tareasSinTiempo: totalTareasSinTiempo,
         tareasAltaPrioridad,
         tiempoEstimadoTotal: `${horasTotales}h ${minutosTotales}m`,
         totalColaboradores: colaboradoresTotales.length
