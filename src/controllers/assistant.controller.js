@@ -437,7 +437,6 @@ export async function getActividadesConRevisiones(req, res) {
 
     /* ------------------------------------------------------------------
        PASO 5: PROCESAR CADA ACTIVIDAD FILTRADA
-       
        LO MÁS IMPORTANTE: Por cada actividad filtrada, hacemos una
        llamada a su endpoint de detalle para obtener sus assignees REALES.
        Esta es la fuente ÚNICA de verdad para los colaboradores de la actividad.
@@ -451,6 +450,11 @@ export async function getActividadesConRevisiones(req, res) {
     const hoyMexico = new Date().toLocaleDateString('sv-SE', {
       timeZone: 'America/Mexico_City'
     });
+
+
+    // Actividades finales - todas las que pasaron el filtro
+    const actividadesFinales = actividadesFiltradas;
+
 
     // Procesar cada actividad filtrada de forma concurrente para mejorar velocidad
     await Promise.all(actividadesFiltradas.map(async (actividad) => {
@@ -557,8 +561,11 @@ export async function getActividadesConRevisiones(req, res) {
       revisionesPorActividad[actividadId] = nuevaEntrada;
     }));
 
-    // Actividades finales - todas las que pasaron el filtro
-    const actividadesFinales = actividadesFiltradas;
+    const cambiosDetectados = await detectarCambiosEnRevisiones(
+      odooUserId,
+      actividadesFinales,
+      revisionesPorActividad
+    );
 
     if (actividadesFinales.length === 0) {
       return res.json({
@@ -2963,54 +2970,198 @@ export async function guardarExplicacionesTarde(req, res) {
     }
 
     // ==================== ANÁLISIS CON IA (UNA SOLA VEZ) ====================
-    const prompt = `
-  Eres un evaluador estricto de reportes laborales.
+    const prompt = `Eres un asistente experto en análisis de reportes laborales. Analiza el siguiente reporte de trabajo y determina si la tarea se completó exitosamente.
 
-Determina si la tarea fue completada basándote únicamente en el contenido del reporte.
+═══════════════════════════════════════════════════════════════════════════════
+INFORMACIÓN DE LA TAREA
+═══════════════════════════════════════════════════════════════════════════════
+NOMBRE: "${primerPendiente.nombre}"
+DESCRIPCIÓN ORIGINAL: "${primerPendiente.descripcion || 'Sin descripción previa'}"
+REPORTE DEL USUARIO: "${queHizo}"
 
-Pendiente:
-"${nombre}"
+═══════════════════════════════════════════════════════════════════════════════
+REGLAS DE EVALUACIÓN
+═══════════════════════════════════════════════════════════════════════════════
 
-Descripción:
-"${descripcion}"
+1️⃣ CRITERIOS PARA MARCAR COMO COMPLETADA (true)
+   ✅ El usuario describe trabajo CONCRETO y FINALIZADO
+   ✅ Menciona resultados verificables o funcionales
+   ✅ Usa verbos en PASADO que indican finalización:
+      • "Terminé", "Completé", "Finalicé", "Implementé"
+      • "Corregí", "Arreglé", "Optimicé", "Creé"
+      • "Ya quedó", "Está listo", "Funciona correctamente"
+   ✅ Describe pruebas exitosas:
+      • "Lo probé y funciona"
+      • "Validé que está funcionando"
+      • "Ya está en producción"
+   ✅ Menciona entregables tangibles:
+      • "Subí el código", "Hice el deploy"
+      • "Envié el reporte", "Documenté el proceso"
 
-Reporte:
-"${queHizo}"
+2️⃣ CRITERIOS PARA MARCAR COMO NO COMPLETADA (false)
+   ❌ El usuario indica explícitamente que NO terminó
+   ❌ Menciona BLOQUEOS o PROBLEMAS sin resolver
+   ❌ Usa verbos que indican intento sin éxito:
+      • "Intenté pero...", "Traté de..."
+      • "Empecé pero...", "Iba a hacer pero..."
+   ❌ Menciona PENDIENTES explícitos:
+      • "Falta", "Aún no", "Todavía no"
+      • "Quedó pendiente", "No lo logré"
+   ❌ Describe bloqueos o dependencias:
+      • "Esperando aprobación/información/acceso"
+      • "No tengo permisos/credenciales"
+      • "Bloqueado por otra tarea/persona"
+   ❌ Avance parcial SIN entregable funcional:
+      • "Hice la mitad", "Avancé un 50%"
+      • "Solo preparé el ambiente"
 
-Reglas:
+3️⃣ CASOS ESPECIALES Y GRISES
+   🔸 Investigación/Análisis SIN código:
+      • Si describe hallazgos concretos → COMPLETADA
+      • Si solo dice "investigué un poco" → NO COMPLETADA
 
-Solo marca como completada si describe trabajo concreto y finalizado.
+   🔸 Trabajo técnico detallado:
+      • Si menciona cambios específicos en archivos/código → COMPLETADA
+      • Si describe arquitectura/diseño implementado → COMPLETADA
+      • Si solo menciona "trabajé en..." sin detalles → NO COMPLETADA
 
-Rechaza reportes vagos, ambiguos o genéricos.
+   🔸 Correcciones/Bugfixes:
+      • Si confirma que el bug está resuelto → COMPLETADA
+      • Si solo identificó el problema → NO COMPLETADA
 
-Si podría aplicar a cualquier otra tarea, es inválido.
+   🔸 Meetings/Reuniones:
+      • Si tomó decisiones/acuerdos concretos → COMPLETADA
+      • Si solo asistió sin conclusiones → NO COMPLETADA
 
-No asumas intención.
+   🔸 ⚠️ IMPORTANTE - Lenguaje coloquial/informal (voz a texto):
+      • "lo que hicimos fue verificar X y documentar Y" → EVALÚA EL CONTENIDO, no el estilo
+      • Si el resultado final fue logrado (aunque lo digan informalmente) → COMPLETADA
+      • Muletillas como "básicamente", "o sea", "este" NO penalizan si el contenido es claro
+      • "empezamos a documentar en Word" con resultado guardado → COMPLETADA
 
-Evalúa contenido, no estilo.
+4️⃣ EXTRACCIÓN DEL MOTIVO (si NO está completada)
+   📌 IMPORTANTE: Identifica la razón ESPECÍFICA del no-completado
 
-Responde exclusivamente con un JSON válido.
-No agregues texto fuera del JSON.
-No uses markdown.
-No incluyas explicaciones adicionales.
+   Categorías de motivos:
+   • Bloqueo técnico: "No tenía acceso al servidor X"
+   • Bloqueo externo: "Esperando aprobación de cliente/gerencia"
+   • Falta información: "Falta especificación del diseño"
+   • Dependencia: "Bloqueado por tarea Y pendiente"
+   • Problema técnico: "Error en API externa sin resolver"
+   • Falta recursos: "No tengo permisos/credenciales necesarios"
+   • Priorización: "Se priorizó otra tarea más urgente"
+   • Default: "No especificó el motivo" (solo si no hay ninguna pista)
 
-Formato exacto:
+   FORMATO: Máximo 100 caracteres, frase clara y específica
+
+5️⃣ EVALUACIÓN DE CALIDAD (0-100)
+   90-100 pts: Explicación detallada con:
+      • Verbos de acción específicos
+      • Resultados medibles/verificables
+      • Menciona archivos/componentes/funcionalidades concretas
+      • Describe el impacto o beneficio logrado
+
+   70-89 pts: Explicación clara con:
+      • Describe qué se hizo
+      • Menciona algunos detalles técnicos
+      • Falta profundidad o contexto completo
+
+   50-69 pts: Explicación vaga con:
+      • Descripción general sin detalles
+      • Usa muletillas ("este", "pues", "entonces")
+      • No menciona resultados concretos
+
+   0-49 pts: Explicación muy pobre:
+      • Solo dice "lo hice" sin explicar
+      • Texto muy corto (<20 caracteres)
+      • No aporta información útil
+
+6️⃣ DETECCIÓN DE RESPUESTAS INVÁLIDAS
+   ⚠️ Si el reporte contiene SOLO estas frases, márcalo como NO COMPLETADA con baja calidad:
+   • "ok", "sí", "no", "bien", "gracias"
+   • "listo", "perfecto", "entendido"
+   • Menos de 3 palabras
+   • Solo muletillas sin contenido
+
+═══════════════════════════════════════════════════════════════════════════════
+INSTRUCCIONES DE RESPUESTA
+═══════════════════════════════════════════════════════════════════════════════
+
+Analiza el reporte cuidadosamente y responde ÚNICAMENTE en formato JSON:
 
 {
-"completada": boolean,
-"razon": string,
-"calidad": number,
-"motivoNoCompletado": string|null
+  "completada": boolean,
+  "confianza": number (0.0 a 1.0),
+  "razon": "Explicación breve de tu evaluación (máx 200 caracteres)",
+  "evidencias": ["frase clave 1", "frase clave 2", "frase clave 3"],
+  "calidadExplicacion": number (0 a 100),
+  "feedbackMejora": "Sugerencia constructiva para mejorar el reporte (o vacío si está excelente)",
+  "motivoNoCompletado": "Motivo específico si false, o null si true"
 }
 
-Si no puedes evaluar, devuelve:
+═══════════════════════════════════════════════════════════════════════════════
+EJEMPLOS DE ANÁLISIS
+═══════════════════════════════════════════════════════════════════════════════
 
+EJEMPLO 1 - COMPLETADA:
+Reporte: "Implementé la validación de formularios en el componente LoginForm.tsx. Agregué Zod para el schema y ahora valida email, contraseña (mínimo 8 caracteres) y muestra errores en tiempo real. Lo probé y funciona correctamente."
+
+Respuesta:
 {
-"completada": false,
-"razon": "No se pudo evaluar",
-"calidad": 0,
-"motivoNoCompletado": "Error de análisis"
-}`;
+  "completada": true,
+  "confianza": 0.95,
+  "razon": "Describe implementación completa con detalles técnicos específicos y validación exitosa",
+  "evidencias": ["Implementé la validación", "Agregué Zod", "Lo probé y funciona correctamente"],
+  "calidadExplicacion": 92,
+  "feedbackMejora": "",
+  "motivoNoCompletado": null
+}
+
+EJEMPLO 2 - NO COMPLETADA:
+Reporte: "Intenté conectar con la API de pagos pero no tengo las credenciales de producción. Quedó pendiente hasta que el cliente las proporcione."
+
+Respuesta:
+{
+  "completada": false,
+  "confianza": 0.9,
+  "razon": "Bloqueado por falta de credenciales externas",
+  "evidencias": ["no tengo las credenciales", "Quedó pendiente"],
+  "calidadExplicacion": 75,
+  "feedbackMejora": "Menciona qué pasos alternativos tomaste mientras esperas las credenciales",
+  "motivoNoCompletado": "Falta credenciales de producción del cliente"
+}
+
+EJEMPLO 3 - REPORTE INFORMAL/VOZ (COMPLETADA):
+Reporte: "Bueno, lo que hicimos básicamente fue, pues, ya sabes, verificamos la información disponible, igual documentamos lo que viene siendo la parte del proyecto y eso, empezamos a documentar en un archivo en Word."
+
+Respuesta:
+{
+  "completada": true,
+  "confianza": 0.78,
+  "razon": "Describe verificación de información y documentación en Word completadas, aunque con lenguaje informal",
+  "evidencias": ["verificamos la información disponible", "documentamos", "documentar en un archivo en Word"],
+  "calidadExplicacion": 55,
+  "feedbackMejora": "Especifica qué información verificaste y qué contenido documentaste en Word",
+  "motivoNoCompletado": null
+}
+
+EJEMPLO 4 - RESPUESTA INVÁLIDA:
+Reporte: "Gracias."
+
+Respuesta:
+{
+  "completada": false,
+  "confianza": 0.95,
+  "razon": "Respuesta inválida: no describe trabajo realizado",
+  "evidencias": [],
+  "calidadExplicacion": 5,
+  "feedbackMejora": "Por favor describe específicamente qué trabajo realizaste en esta tarea",
+  "motivoNoCompletado": "No proporcionó explicación válida"
+}
+
+═══════════════════════════════════════════════════════════════════════════════
+
+AHORA ANALIZA EL REPORTE PROPORCIONADO Y RESPONDE EN JSON:`;
 
     const aiResult = await smartAICall(prompt);
 
@@ -3171,16 +3322,6 @@ Si no puedes evaluar, devuelve:
         const actividadVerificada = resultado.actividades.find(a => a.actividadId === actividadId);
         const pendienteVerificado = actividadVerificada?.pendientes.find(p => p.pendienteId === pendienteId);
 
-        // ✅ FIX LOG: Mostrar datos reales en vez de 'OK'/'MISSING'
-        console.log('🔍 Verificación después de guardar:', {
-          emailUsuario: resultado.emailUsuario || emailUsuario,
-          terminada: pendienteVerificado?.terminada,
-          motivoNoCompletado: pendienteVerificado?.motivoNoCompletado,
-          queHizoGuardado: pendienteVerificado?.queHizo
-            ? `"${pendienteVerificado.queHizo.substring(0, 60)}..."`
-            : 'VACÍO ⚠️',
-        });
-
         resultadosGuardado.push({
           emailUsuario: resultado.emailUsuario || emailUsuario,
           nombreUsuario: resultado.nombreUsuario,
@@ -3194,6 +3335,35 @@ Si no puedes evaluar, devuelve:
 
         console.log(`✅ Guardado exitosamente en documento de: ${resultado.emailUsuario || emailUsuario}`);
 
+        req.io.to(`usuario:${emailUsuario}`).emit("explicacion_guardada", {
+          actividadId,
+          pendienteId,
+          completada: estaTerminada,
+          validadaPorIA: esValidadaPorIA,
+          confianza: validacion.confianza,
+          calidadExplicacion: validacion.calidadExplicacion,
+          razon: validacion.razon,
+          feedbackMejora: validacion.feedbackMejora || "",
+          motivoNoCompletado: !estaTerminada ? (validacion.motivoNoCompletado || null) : null,
+          message: estaTerminada
+            ? "✅ Tarea marcada como completada"
+            : `⏳ Tarea no completada${validacion.motivoNoCompletado ? ': ' + validacion.motivoNoCompletado : ''}`,
+          timestamp: fechaActual
+        });
+
+        res.status(200).json({
+          success: true,
+          completada: estaTerminada,
+          confianza: validacion.confianza || 0.8,
+          calidadExplicacion: validacion.calidadExplicacion || 70,
+          razon: validacion.razon || "Análisis por defecto",
+          feedbackMejora: validacion.feedbackMejora || "",
+          motivoNoCompletado: !estaTerminada ? (validacion.motivoNoCompletado || null) : null,
+          message: estaTerminada
+            ? "✅ Tarea marcada como completada"
+            : `⏳ Tarea no completada${validacion.motivoNoCompletado ? ': ' + validacion.motivoNoCompletado : ''}`,
+          timestamp: fechaActual
+        });
       } catch (saveError) {
         console.error(`❌ Error guardando en documento ${actividadDoc._id}:`, saveError);
         resultadosGuardado.push({

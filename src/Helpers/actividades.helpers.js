@@ -30,7 +30,9 @@ export async function detectarCambiosEnRevisiones(odooUserId, actividadesActuale
       };
     }
 
-    const today = new Date().toISOString().split('T')[0];
+    const today = new Date().toLocaleDateString('sv-SE', {
+      timeZone: 'America/Mexico_City'
+    });
     const actividadesGuardadasHoy = actividadesGuardadas.actividades.filter(a => a.fecha === today);
 
     if (actividadesGuardadasHoy.length === 0) {
@@ -50,7 +52,7 @@ export async function detectarCambiosEnRevisiones(odooUserId, actividadesActuale
     const revisionesEliminadas = actividadesGuardadasHoy.filter(a => !idsActuales.has(a.actividadId));
 
     const cambiosEnTareas = [];
-    
+
     actividadesActuales.forEach(actividadActual => {
       const actividadGuardada = actividadesGuardadasHoy.find(ag => ag.actividadId === actividadActual.id);
 
