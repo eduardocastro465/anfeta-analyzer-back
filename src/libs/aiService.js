@@ -77,27 +77,27 @@ async function llamarGemini(prompt) {
 ================================ */
 
 export async function smartAICall(prompt) {
-  try {
-    if (poolGroq.length === 0) {
-      throw new Error("NO_GROQ_KEYS");
-    }
-
-    return await llamarGroq(prompt);
-
-  } catch (groqError) {
-    console.warn(" Groq falló, usando Gemini:", groqError.message);
-
     try {
-      return await llamarGemini(prompt);
-    } catch (geminiError) {
-      const err = new Error("AI_PROVIDER_FAILED");
-      err.cause = {
-        groq: groqError?.message || groqError,
-        gemini: geminiError?.message || geminiError
-      };
-      throw err;
+        if (poolGroq.length === 0) {
+            throw new Error("NO_GROQ_KEYS");
+        }
+
+        return await llamarGroq(prompt);
+
+    } catch (groqError) {
+        console.warn(" Groq falló, usando Gemini:", groqError.message);
+
+        try {
+            return await llamarGemini(prompt);
+        } catch (geminiError) {
+            const err = new Error("AI_PROVIDER_FAILED");
+            err.cause = {
+                groq: groqError?.message || groqError,
+                gemini: geminiError?.message || geminiError
+            };
+            throw err;
+        }
     }
-  }
 }
 
 
@@ -108,12 +108,31 @@ export async function smartAICall(prompt) {
 export function parseAIJSONSafe(text) {
     if (!text) return null;
 
-    const match = text.match(/\{[\s\S]*\}/);
-    if (!match) return null;
+    const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    const cleaned = fenceMatch ? fenceMatch[1].trim() : text.trim();
 
-    try {
-        return JSON.parse(match[0]);
-    } catch {
-        return null;
+    const candidates = [
+        cleaned,
+        cleaned.match(/\{[\s\S]*?\}/)?.[0], // no greedy
+    ].filter(Boolean);
+
+    for (const candidate of candidates) {
+        try {
+            const parsed = JSON.parse(candidate);
+
+            // Validación estructural mínima
+            if (
+                parsed &&
+                typeof parsed === "object" &&
+                typeof parsed.esValida === "boolean" &&
+                typeof parsed.razon === "string"
+            ) {
+                return parsed;
+            }
+        } catch (err) {
+            console.warn("Parse fallido:", err.message);
+        }
     }
+
+    return null;
 }

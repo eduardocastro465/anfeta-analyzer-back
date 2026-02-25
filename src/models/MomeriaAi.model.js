@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 
 const memoriaSchema = new mongoose.Schema({
-    odooUserId: { type: String, required: true, unique: true, index: true },
+    odooUserId: { type: String, required: true },
     email: String,
     memorias: {
         preferencias: { type: [String], default: [] },

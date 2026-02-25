@@ -181,7 +181,7 @@ const actividadesSchema = new mongoose.Schema(
         email: { type: Boolean, default: false },
         push: { type: Boolean, default: true }
       },
-      tema: { type: String, enum: ['CLARO', 'OSCURO', 'AUTO'], default: 'AUTO' }
+      tema: { type: String, enum: ['light', 'dark', 'AUTO'], default: 'AUTO' }
     },
 
     // 🔥 AUDITORÍA

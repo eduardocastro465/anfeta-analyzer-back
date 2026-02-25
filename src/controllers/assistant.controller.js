@@ -280,6 +280,7 @@ async function obtenerRevisionesPorFecha(date, email) {
  */
 async function obtenerDetalleActividadPorId(actividadId) {
   try {
+
     const response = await axios.get(`${API_URL_ANFETA}/actividades/${actividadId}`);
     return response.data?.success ? response.data.data : null;
   } catch (error) {
@@ -460,6 +461,7 @@ export async function getActividadesConRevisiones(req, res) {
     await Promise.all(actividadesFiltradas.map(async (actividad) => {
       const actividadId = actividad.id;
 
+      console.log("ID de la actividad: ", actividadId)
       // 1. Obtener detalle completo de la actividad (para assignees y proyecto)
       const detalleActividad = await obtenerDetalleActividadPorId(actividadId);
 
@@ -471,7 +473,7 @@ export async function getActividadesConRevisiones(req, res) {
         detalleActividad.assignees.forEach(emailAssignee => {
           // Limpiamos el email para obtener un nombre legible
           const nombreLimpio = limpiarNombreColaborador(emailAssignee);
-
+          console.log("Nombre limpio: ", nombreLimpio)
           // Evitar duplicados en la misma actividad
           if (!colaboradoresNombres.includes(nombreLimpio)) {
             colaboradoresNombres.push(nombreLimpio);
@@ -930,6 +932,8 @@ RESPONDE SOLO EL TITULO
         horaFin: actividad.horaFin,
         status: actividad.status,
         fecha: today,
+        tituloProyecto: revisiones?.actividad?.proyecto || "",
+        colaboradoresEmails: revisiones?.actividad?.colaboradoresEmails || [],
         colaboradores: revisiones?.actividad?.colaboradores || [],
         assigneesOriginales: revisiones?.actividad?.assigneesOriginales || [],
         pendientes: todasLasTareas.map(t => {
@@ -1731,28 +1735,21 @@ TIEMPO: ${duracionMin || duration || "No especificado"}
 
 Criterios obligatorios:
 
-La explicación debe describir una acción concreta relacionada directamente con el pendiente.
+La explicación viene de voz a texto, por lo que puede contener errores de transcripción, palabras mal reconocidas o jerga técnica del equipo.
 
-Debe existir correspondencia semántica específica, no solo palabras similares.
+Evalúa la INTENCIÓN y el CONTEXTO, no la literalidad exacta de las palabras.
 
-No aceptes explicaciones genéricas que puedan aplicar a múltiples pendientes distintos.
+Acepta cuando:
+- Las palabras suenan similar al pendiente aunque estén mal transcritas ("pack" = "back", "VAC" = "back", "espartino" = "vespertino").
+- Se describe una acción relacionada con el área del pendiente aunque use términos distintos.
+- La explicación es informal o coloquial pero el contexto es claro.
 
-No aceptes frases vagas como:
+Solo rechaza si:
+- La explicación claramente habla de algo completamente diferente al pendiente.
+- Son menos de 5 palabras sin contenido útil.
+- Es solo una confirmación vacía: "sí", "ok", "listo", "gracias".
 
-"Revisión general"
-
-"Actualización"
-
-"Se trabajó en ello"
-
-"Pendiente atendido"
-
-Si la explicación es ambigua, incompleta o demasiado general, es inválida.
-
-No asumas intención correcta si no está explícitamente descrita.
-
-Regla clave:
-Si la explicación podría aplicarse a otro pendiente diferente sin cambiar el texto, entonces es inválida.
+Ante la duda, marca como válida.
 
 Responde exclusivamente en formato JSON:
 
@@ -2908,8 +2905,6 @@ export async function guardarExplicacionesTarde(req, res) {
     const decoded = jwt.verify(token, TOKEN_SECRET);
     const emailUsuario = decoded.email;
 
-    console.log('👤 Usuario autenticado por JWT:', emailUsuario); // ✅ LOG ÚTIL
-
     // Validaciones
     if (!queHizo || !actividadId || !pendienteId) {
       return res.status(400).json({
@@ -2918,10 +2913,12 @@ export async function guardarExplicacionesTarde(req, res) {
       });
     }
 
-    if (queHizo.trim().length < 5) {
+    if (queHizo.trim().length < 15) {
       return res.status(400).json({
         success: false,
-        message: "La explicación es demasiado corta. Por favor proporciona más detalles.",
+        requiereMejora: true,
+        preguntaAclaracion: "No escuché bien tu respuesta. ¿Puedes explicar con más detalle qué hiciste?",
+        message: "La explicación es demasiado corta.",
       });
     }
 
@@ -2972,7 +2969,7 @@ export async function guardarExplicacionesTarde(req, res) {
     // ==================== ANÁLISIS CON IA (UNA SOLA VEZ) ====================
     const prompt = `Eres un asistente experto en análisis de reportes laborales. Analiza el siguiente reporte de trabajo y determina si la tarea se completó exitosamente.
 
-═══════════════════════════════════════════════════════════════════════════════
+    ═══════════════════════════════════════════════════════════════════════════════
 INFORMACIÓN DE LA TAREA
 ═══════════════════════════════════════════════════════════════════════════════
 NOMBRE: "${primerPendiente.nombre}"
@@ -3018,20 +3015,20 @@ REGLAS DE EVALUACIÓN
 3️⃣ CASOS ESPECIALES Y GRISES
    🔸 Investigación/Análisis SIN código:
       • Si describe hallazgos concretos → COMPLETADA
-      • Si solo dice "investigué un poco" → NO COMPLETADA
+      • Si solo dice "investigué un poco" → NECESITA ACLARACIÓN
 
    🔸 Trabajo técnico detallado:
       • Si menciona cambios específicos en archivos/código → COMPLETADA
       • Si describe arquitectura/diseño implementado → COMPLETADA
-      • Si solo menciona "trabajé en..." sin detalles → NO COMPLETADA
+      • Si solo menciona "trabajé en..." sin detalles → NECESITA ACLARACIÓN
 
    🔸 Correcciones/Bugfixes:
       • Si confirma que el bug está resuelto → COMPLETADA
-      • Si solo identificó el problema → NO COMPLETADA
+      • Si solo identificó el problema → NECESITA ACLARACIÓN
 
    🔸 Meetings/Reuniones:
       • Si tomó decisiones/acuerdos concretos → COMPLETADA
-      • Si solo asistió sin conclusiones → NO COMPLETADA
+      • Si solo asistió sin conclusiones → NECESITA ACLARACIÓN
 
    🔸 ⚠️ IMPORTANTE - Lenguaje coloquial/informal (voz a texto):
       • "lo que hicimos fue verificar X y documentar Y" → EVALÚA EL CONTENIDO, no el estilo
@@ -3083,6 +3080,24 @@ REGLAS DE EVALUACIÓN
    • Menos de 3 palabras
    • Solo muletillas sin contenido
 
+7️⃣ CUÁNDO PEDIR ACLARACIÓN (necesitaAclaracion: true)
+   🔶 Úsalo cuando NO puedas determinar con certeza si se completó:
+   • Descripción vaga pero hay intención de trabajo real
+   • Lenguaje ambiguo que podría interpretarse de ambas formas
+   • confianza < 0.65 Y no hay señales claras de no-completado
+   • El usuario habla en futuro o presente sin confirmar resultado
+
+   En estos casos:
+   • completada: null
+   • necesitaAclaracion: true
+   • preguntaAclaracion: una pregunta corta, amable y específica
+     Ejemplo: "¿Ya pudiste verificar que funcionaba o aún falta?"
+              "¿El proceso quedó terminado o falta algún paso?"
+              "¿Qué resultado obtuviste al finalizar?"
+
+   ⚠️ Solo usa completada: false cuando el usuario EXPLÍCITAMENTE
+   diga que no terminó, tiene bloqueos, o quedó pendiente.
+
 ═══════════════════════════════════════════════════════════════════════════════
 INSTRUCCIONES DE RESPUESTA
 ═══════════════════════════════════════════════════════════════════════════════
@@ -3090,13 +3105,15 @@ INSTRUCCIONES DE RESPUESTA
 Analiza el reporte cuidadosamente y responde ÚNICAMENTE en formato JSON:
 
 {
-  "completada": boolean,
+  "completada": boolean o null,
+  "necesitaAclaracion": boolean,
   "confianza": number (0.0 a 1.0),
   "razon": "Explicación breve de tu evaluación (máx 200 caracteres)",
   "evidencias": ["frase clave 1", "frase clave 2", "frase clave 3"],
   "calidadExplicacion": number (0 a 100),
   "feedbackMejora": "Sugerencia constructiva para mejorar el reporte (o vacío si está excelente)",
-  "motivoNoCompletado": "Motivo específico si false, o null si true"
+  "preguntaAclaracion": "Pregunta concreta si necesitaAclaracion es true, o null",
+  "motivoNoCompletado": "Motivo específico si false, o null si true o null"
 }
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -3109,11 +3126,13 @@ Reporte: "Implementé la validación de formularios en el componente LoginForm.t
 Respuesta:
 {
   "completada": true,
+  "necesitaAclaracion": false,
   "confianza": 0.95,
   "razon": "Describe implementación completa con detalles técnicos específicos y validación exitosa",
   "evidencias": ["Implementé la validación", "Agregué Zod", "Lo probé y funciona correctamente"],
   "calidadExplicacion": 92,
   "feedbackMejora": "",
+  "preguntaAclaracion": null,
   "motivoNoCompletado": null
 }
 
@@ -3123,11 +3142,13 @@ Reporte: "Intenté conectar con la API de pagos pero no tengo las credenciales d
 Respuesta:
 {
   "completada": false,
+  "necesitaAclaracion": false,
   "confianza": 0.9,
   "razon": "Bloqueado por falta de credenciales externas",
   "evidencias": ["no tengo las credenciales", "Quedó pendiente"],
   "calidadExplicacion": 75,
   "feedbackMejora": "Menciona qué pasos alternativos tomaste mientras esperas las credenciales",
+  "preguntaAclaracion": null,
   "motivoNoCompletado": "Falta credenciales de producción del cliente"
 }
 
@@ -3137,11 +3158,13 @@ Reporte: "Bueno, lo que hicimos básicamente fue, pues, ya sabes, verificamos la
 Respuesta:
 {
   "completada": true,
+  "necesitaAclaracion": false,
   "confianza": 0.78,
   "razon": "Describe verificación de información y documentación en Word completadas, aunque con lenguaje informal",
   "evidencias": ["verificamos la información disponible", "documentamos", "documentar en un archivo en Word"],
   "calidadExplicacion": 55,
   "feedbackMejora": "Especifica qué información verificaste y qué contenido documentaste en Word",
+  "preguntaAclaracion": null,
   "motivoNoCompletado": null
 }
 
@@ -3151,14 +3174,31 @@ Reporte: "Gracias."
 Respuesta:
 {
   "completada": false,
+  "necesitaAclaracion": false,
   "confianza": 0.95,
   "razon": "Respuesta inválida: no describe trabajo realizado",
   "evidencias": [],
   "calidadExplicacion": 5,
   "feedbackMejora": "Por favor describe específicamente qué trabajo realizaste en esta tarea",
+  "preguntaAclaracion": null,
   "motivoNoCompletado": "No proporcionó explicación válida"
 }
 
+EJEMPLO 5 - NECESITA ACLARACIÓN:
+Reporte: "Bueno escucha principalmente, quiero ver si todo funciona correctamente."
+
+Respuesta:
+{
+  "completada": null,
+  "necesitaAclaracion": true,
+  "confianza": 0.4,
+  "razon": "No queda claro si ya realizó la verificación o aún la tiene pendiente",
+  "evidencias": [],
+  "calidadExplicacion": 30,
+  "feedbackMejora": "Indica si ya verificaste que funciona o si aún falta hacerlo",
+  "preguntaAclaracion": "¿Ya pudiste verificar que todo funciona correctamente o aún falta revisarlo?",
+  "motivoNoCompletado": null
+}
 ═══════════════════════════════════════════════════════════════════════════════
 
 AHORA ANALIZA EL REPORTE PROPORCIONADO Y RESPONDE EN JSON:`;
@@ -3200,6 +3240,27 @@ AHORA ANALIZA EL REPORTE PROPORCIONADO Y RESPONDE EN JSON:`;
       : true;
 
     const esValidadaPorIA = validacion.confianza >= 0.7 && validacion.calidadExplicacion >= 60;
+
+
+    const necesitaAclaracion =
+      validacion.necesitaAclaracion === true ||
+      (validacion.completada === null && validacion.confianza < 0.65);
+
+    if (necesitaAclaracion) {
+      return res.status(200).json({
+        success: true,
+        requiereMejora: true,
+        completada: null,
+        confianza: validacion.confianza,
+        calidadExplicacion: validacion.calidadExplicacion,
+        razon: validacion.razon,
+        preguntaAclaracion: validacion.preguntaAclaracion ||
+          "¿Puedes describir con más detalle qué resultado obtuviste?",
+        feedbackMejora: validacion.feedbackMejora || "",
+        message: "🎤 Necesitamos un poco más de detalle",
+      });
+    }
+
 
 
     // ==================== GUARDAR EN TODOS LOS DOCUMENTOS ====================
@@ -3351,19 +3412,6 @@ AHORA ANALIZA EL REPORTE PROPORCIONADO Y RESPONDE EN JSON:`;
           timestamp: fechaActual
         });
 
-        res.status(200).json({
-          success: true,
-          completada: estaTerminada,
-          confianza: validacion.confianza || 0.8,
-          calidadExplicacion: validacion.calidadExplicacion || 70,
-          razon: validacion.razon || "Análisis por defecto",
-          feedbackMejora: validacion.feedbackMejora || "",
-          motivoNoCompletado: !estaTerminada ? (validacion.motivoNoCompletado || null) : null,
-          message: estaTerminada
-            ? "✅ Tarea marcada como completada"
-            : `⏳ Tarea no completada${validacion.motivoNoCompletado ? ': ' + validacion.motivoNoCompletado : ''}`,
-          timestamp: fechaActual
-        });
       } catch (saveError) {
         console.error(`❌ Error guardando en documento ${actividadDoc._id}:`, saveError);
         resultadosGuardado.push({
@@ -3966,6 +4014,8 @@ export async function getActividadesDesdeDB(req, res) {
       return true;
     });
 
+    const actividadesFinales = actividadesFiltradas;
+
     if (actividadesFiltradas.length === 0) {
       return res.json({
         success: true,
@@ -3990,6 +4040,7 @@ export async function getActividadesDesdeDB(req, res) {
     let tiempoTotalEstimado = 0;
 
     actividadesFiltradas.forEach(actividad => {
+
       const colaboradoresNombres = (actividad.colaboradoresEmails || actividad.colaboradores || []).map(c =>
         limpiarNombreColaborador(c)
       );
@@ -4070,6 +4121,16 @@ export async function getActividadesDesdeDB(req, res) {
     const horasTotales = Math.floor(tiempoTotalEstimado / 60);
     const minutosTotales = tiempoTotalEstimado % 60;
     const colaboradoresTotales = Array.from(todosColaboradoresSet);
+
+    let proyectoPrincipal = "Sin proyecto especifico";
+    if (actividadesFinales.length > 0) {
+      const actividadPrincipal = actividadesFinales[0];
+      if (actividadPrincipal.tituloProyecto && actividadPrincipal.tituloProyecto !== "Sin proyecto") {
+        proyectoPrincipal = actividadPrincipal.tituloProyecto;
+      } else if (actividadPrincipal.titulo) {
+        proyectoPrincipal = actividadPrincipal.titulo.split(',')[0] || actividadPrincipal.titulo.substring(0, 30);
+      }
+    }
 
     /* ------------------------------------------------------------------
        PASO 6: REUTILIZAR ANÁLISIS GUARDADO O GENERAR UNO NUEVO
@@ -4154,7 +4215,10 @@ Sin pendientes urgentes."
           colaboradores: rev.actividad.colaboradores,
           tipo: rev.actividad.tipo,
           totalPendientes: rev.pendientesConTiempo.length + rev.pendientesSinTiempo.length,
-          tieneRevisionesConTiempo: rev.pendientesConTiempo.length > 0
+          tieneRevisionesConTiempo: rev.pendientesConTiempo.length > 0,
+          colaboradoresEmails: rev?.actividad?.colaboradoresEmails || [],
+          assigneesOriginales: rev?.actividad?.assigneesOriginales || [],
+          esNueva: false,
         };
       }),
       revisionesPorActividad: actividadesFiltradas.map(act => {
@@ -4166,6 +4230,10 @@ Sin pendientes urgentes."
           actividadHorario: `${act.horaInicio} - ${act.horaFin}`,
           colaboradores: rev.actividad.colaboradores,
           tipo: rev.actividad.tipo,
+          colaboradoresEmails: rev.actividad.colaboradoresEmails || [],
+          assigneesOriginales: rev.actividad.assigneesOriginales || [],
+          esNueva: false,
+          cambiosDetectados: null,
           tareas: todasLasTareas,
           tareasConTiempo: rev.pendientesConTiempo,
           tareasSinTiempo: rev.pendientesSinTiempo,
@@ -4183,25 +4251,42 @@ Sin pendientes urgentes."
       answer: aiResult.text,
       provider: aiResult.provider,
       sessionId,
-      analisisReutilizado,
-      fuenteDatos: "base_de_datos_local",
+      proyectoPrincipal,
+      colaboradoresInvolucrados: colaboradoresTotales,
+      cambios: {
+        detectados: false,
+        esPrimeraVez: false,
+        resumen: {
+          revisionesNuevas: 0,
+          revisionesEliminadas: 0,
+          cambiosEnTareas: 0
+        },
+        detalle: {
+          revisionesNuevas: [],
+          revisionesEliminadas: [],
+          cambiosEnTareas: []
+        }
+      },
       metrics: {
-        totalActividades: actividadesFiltradas.length,
+        totalActividadesProgramadas: actividadesFiltradas.length,
+        actividadesConPendientes: actividadesFinales.length,
         tareasConTiempo: totalTareasConTiempo,
+        tareasSinTiempo: totalTareasSinTiempo,
         tareasAltaPrioridad,
         tiempoEstimadoTotal: `${horasTotales}h ${minutosTotales}m`,
         totalColaboradores: colaboradoresTotales.length
       },
       data: respuestaData,
-      colaboradoresTotales,
+      multiActividad: true,
       filtrosAplicados: {
         excluirFTF: true,
         excluir00sec: true,
         horarioLaboral: "09:00 - 18:00",
-        fecha: today
+        incluirTareasSinTiempo: true,
+        excluirPendientesFuturos: true,
+        colaboradoresDesde: "base_de_datos_local"
       }
     });
-
   } catch (error) {
     console.error("Error en getActividadesDesdeDB:", error);
 
