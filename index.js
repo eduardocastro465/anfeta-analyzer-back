@@ -9,6 +9,7 @@ import { Server } from "socket.io";
 import { textoColorido } from "./src/utils/colorText.js";
 import { CORS_ORIGINS, API_VERSION } from "./src/config.js";
 import { connectDB } from "./src/database/db.js";
+import NotificationService from "./src/services/notificationService.js"; // ← NUEVO
 
 // Constantes
 const modoProduction = process.env.NODE_ENV === "production";
@@ -30,13 +31,17 @@ const io = new Server(server, {
   transports: ["websocket", "polling"]
 });
 
-// Hacer io accesible en las rutas
+// Inicializar servicio de notificaciones ← NUEVO
+const notificationService = new NotificationService(io);
+
+// Hacer io y notificationService accesibles en las rutas ← MODIFICADO
 app.use((req, res, next) => {
   req.io = io;
+  req.notificationService = notificationService; // ← NUEVO
   next();
 });
 
-// Manejar conexiones Socket.io
+// Manejar conexiones Socket.io ← MODIFICADO
 io.on("connection", (socket) => {
   console.log("Cliente conectado:", socket.id);
 
@@ -45,8 +50,46 @@ io.on("connection", (socket) => {
     if (email) {
       socket.join(`usuario:${email}`);
       console.log(`Usuario ${email} registrado en sala usuario:${email}`);
-      socket.emit("registrado", { email, sala: `usuario:${email}` });
+      socket.emit("registrado", { 
+        email, 
+        sala: `usuario:${email}`,
+        historial: notificationService.getUserNotifications(email) // ← NUEVO
+      });
+
+      // Enviar notificación de bienvenida ← NUEVO
+      const bienvenida = notificationService.createNotification('info', {
+        titulo: 'Bienvenido',
+        mensaje: 'Te has conectado correctamente al sistema de notificaciones',
+        timestamp: new Date().toISOString()
+      });
+      
+      notificationService.sendToUser(email, bienvenida);
     }
+  });
+
+  // Marcar notificación como leída ← NUEVO
+  socket.on("marcar-leida", (data) => {
+    const { email, notificationId } = data;
+    if (email && notificationId) {
+      const marked = notificationService.markAsRead(email, notificationId);
+      if (marked) {
+        socket.emit("notificacion-marcada", { notificationId, success: true });
+      }
+    }
+  });
+
+  // Solicitar historial ← NUEVO
+  socket.on("solicitar-historial", (email) => {
+    if (email) {
+      const historial = notificationService.getUserNotifications(email);
+      socket.emit("historial-notificaciones", historial);
+    }
+  });
+
+  // Unirse a sala específica ← NUEVO
+  socket.on("unirse-sala", (sala) => {
+    socket.join(sala);
+    console.log(`Socket ${socket.id} unido a sala: ${sala}`);
   });
 
   // Manejar desconexión

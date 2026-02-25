@@ -15,6 +15,7 @@ import { detectarCambiosEnRevisiones } from "../Helpers/actividades.helpers.js";
 import { generarHashActividades } from "../Helpers/generarHashActividades.helper.js";
 import { detectarYSincronizarCambios, detectarCambiosSinSincronizar } from "../Helpers/detectarCambiosActividades.helper.js";
 import crypto from 'crypto';
+import NotificationService from "../services/notificationService.js"; //Servicio de notiifaciones
 
 export async function verificarAnalisisDelDia(req, res) {
   try {
@@ -1763,6 +1764,19 @@ Responde exclusivamente en formato JSON:
 
     if (!aiResult || !aiResult.text) {
       console.error("❌ La IA no respondió correctamente");
+
+      /*Agrregacion de servicio para*/
+      // 🔔 NOTIFICACIÓN DE ERROR
+      if (req.notificationService) {
+        await req.notificationService.sendToUser(odooUserEmail,
+          req.notificationService.createNotification('error', {
+            titulo: 'Error en validación',
+            mensaje: 'La IA no respondió correctamente. Intenta nuevamente.'
+          })
+        );
+      }
+
+
       return res.status(503).json({
         esValida: false,
         razon: "La IA no respondió correctamente. Intenta nuevamente."
@@ -1776,6 +1790,18 @@ Responde exclusivamente en formato JSON:
 
 
     if (!aiEvaluation.esValida) {
+
+
+      // 🔔 NOTIFICACIÓN DE VALIDACIÓN FALLIDA
+      if (req.notificationService) {
+        await req.notificationService.sendToUser(odooUserEmail,
+          req.notificationService.createNotification('warning', {
+            titulo: 'Explicación no válida',
+            mensaje: `Tu explicación para "${nombrePendiente}" no fue aceptada: ${aiEvaluation.razon}`
+          })
+        );
+      }
+
       return res.status(200).json({
         esValida: false,
         razon: aiEvaluation.razon,
@@ -1948,6 +1974,34 @@ Responde exclusivamente en formato JSON:
         console.log(`📡 Notificado a: ${usuario.emailUsuario}`);
       }
     });
+
+
+
+    // 🔔 NOTIFICACIÓN DE ÉXITO al usuario que guardó
+    if (req.notificationService) {
+      // Notificación personal para el que guardó
+      await req.notificationService.sendToUser(emailUsuario,
+        req.notificationService.createNotification('success', {
+          titulo: 'Reporte guardado',
+          mensaje: `${emailUsuario} reportó actividad: ${actividadTitulo} - ${nombrePendiente}`,
+          detalles: {
+            actividad: actividadTitulo,
+            pendiente: nombrePendiente,
+            explicacion: explicacion.substring(0, 50) + (explicacion.length > 50 ? '...' : '')
+          }
+        })
+      );
+
+      // 🔔 NOTIFICACIÓN A ADMINISTRADORES (opcional)
+      // Si quieres notificar a admins cuando alguien reporta
+      const admins = ['admin1@email.com', 'admin2@email.com']; // Obtén esto de tu BD
+      await req.notificationService.sendToMany(admins,
+        req.notificationService.createNotification('info', {
+          titulo: 'Nuevo reporte de actividad',
+          mensaje: `${emailUsuario} reportó: ${actividadTitulo} - ${nombrePendiente}`
+        })
+      );
+    }
 
     // Preparar respuesta
     return res.status(200).json({
