@@ -3,7 +3,7 @@ import { getAllUsers } from './users.controller.js';
 import jwt from 'jsonwebtoken';
 import { isGeminiQuotaError } from '../libs/geminiRetry.js'
 import { sanitizeObject } from '../libs/sanitize.js'
-import { parseAIJSONSafe, smartAICall } from '../libs/aiService.js';
+import { smartAICall, parseRespuestaConversacional, parseAIJSONSafe } from '../libs/aiService.js';
 import { generarSessionIdDiario } from '../libs/generarSessionIdDiario.js';
 import memoriaService from '../Helpers/MemoriaService.helpers.js';
 import ActividadesSchema from "../models/actividades.model.js";
@@ -2508,6 +2508,8 @@ export async function consultarIA(req, res) {
     const decoded = jwt.verify(token, TOKEN_SECRET);
     const { id: userId } = decoded;
 
+    console.log("cuerpo de la req", req.body)
+
     if (!mensaje || mensaje.trim().length === 0) {
       return res.status(400).json({
         success: false,
@@ -2594,7 +2596,7 @@ export async function consultarIA(req, res) {
       textoLimpio = textoLimpio.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
     }
 
-    const respuestaIA = parseAIJSONSafe(textoLimpio);
+    const respuestaIA = parseRespuestaConversacional(textoLimpio);
 
     // Validar respuesta
     if (!respuestaIA || !respuestaIA.respuesta) {
@@ -2652,6 +2654,8 @@ export async function consultarIAProyecto(req, res) {
     const { token } = req.cookies;
     const decoded = jwt.verify(token, TOKEN_SECRET);
     const { id: userId, email } = decoded;
+
+    console.log("cuerpo de la req", req.body)
 
     if (!mensaje || mensaje.trim().length === 0) {
       return res.status(400).json({
@@ -2751,6 +2755,7 @@ export async function consultarIAProyecto(req, res) {
 
     const aiResult = await smartAICall(prompt);
 
+    console.log("aiResult", aiResult)
     // Limpiar respuesta
     let textoLimpio = aiResult.text.trim();
 
@@ -2759,7 +2764,7 @@ export async function consultarIAProyecto(req, res) {
       textoLimpio = textoLimpio.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
     }
 
-    const respuestaIA = parseAIJSONSafe(textoLimpio);
+    const respuestaIA = parseRespuestaConversacional(textoLimpio);
 
     // Validar respuesta
     if (!respuestaIA || !respuestaIA.respuesta) {
@@ -2944,7 +2949,7 @@ export async function obtenerOCrearSessionActual(req, res) {
 
 export async function guardarExplicacionesTarde(req, res) {
   try {
-    const { queHizo, actividadId, pendienteId, sessionId } = sanitizeObject(req.body);
+    const { queHizo, actividadId, pendienteId, sessionId, motivoNoCompletado, soloGuardarMotivo } = sanitizeObject(req.body);
     console.log('📥 Datos recibidos:', { queHizo, actividadId, pendienteId, sessionId });
 
     const { token } = req.cookies;
@@ -2960,21 +2965,14 @@ export async function guardarExplicacionesTarde(req, res) {
     const emailUsuario = decoded.email;
 
     // Validaciones
-    if (!queHizo || !actividadId || !pendienteId) {
+    if (!actividadId || !pendienteId) {
       return res.status(400).json({
         success: false,
         message: "Parámetros inválidos: queHizo, actividadId y pendienteId son requeridos",
       });
     }
 
-    if (queHizo.trim().length < 15) {
-      return res.status(400).json({
-        success: false,
-        requiereMejora: true,
-        preguntaAclaracion: "No escuché bien tu respuesta. ¿Puedes explicar con más detalle qué hiciste?",
-        message: "La explicación es demasiado corta.",
-      });
-    }
+
 
     // ✅ FIX PRINCIPAL: Filtrar por emailUsuario del JWT para evitar docs con emailUsuario undefined
     const actividadDocs = await ActividadesSchema.find({
@@ -3003,7 +3001,46 @@ export async function guardarExplicacionesTarde(req, res) {
       console.warn(`⚠️ Usando ${docsParaActualizar.length} docs SIN filtro email (docs legacy)`);
     }
 
+    if (soloGuardarMotivo && motivoNoCompletado) {
+      const fechaActual = new Date();
+      for (const actividadDoc of docsParaActualizar) {
+        await ActividadesSchema.findOneAndUpdate(
+          {
+            _id: actividadDoc._id,
+            "actividades.actividadId": actividadId,
+            "actividades.pendientes.pendienteId": pendienteId
+          },
+          {
+            $set: {
+              "actividades.$[act].pendientes.$[pend].motivoNoCompletado": motivoNoCompletado.trim(),
+              "actividades.$[act].pendientes.$[pend].queHizo": queHizo?.trim() || "",
+              "actividades.$[act].pendientes.$[pend].terminada": false,
+              "actividades.$[act].pendientes.$[pend].revisadoPorVoz": true,
+              "actividades.$[act].pendientes.$[pend].ultimaActualizacion": fechaActual,
+              "actividades.$[act].pendientes.$[pend].actualizadoPor": emailUsuario,
+            }
+          },
+          {
+            arrayFilters: [
+              { "act.actividadId": actividadId },
+              { "pend.pendienteId": pendienteId }
+            ],
+            runValidators: false
+          }
+        );
+      }
+      console.log(`✅ Motivo guardado para pendiente ${pendienteId}`);
+      return res.json({ success: true, completada: false });
+    }
 
+    if (queHizo.trim().length < 15) {
+      return res.status(400).json({
+        success: false,
+        requiereMejora: true,
+        preguntaAclaracion: "No escuché bien tu respuesta. ¿Puedes explicar con más detalle qué hiciste?",
+        message: "La explicación es demasiado corta.",
+      });
+    }
     // Obtener el primer documento para hacer el análisis de IA (solo una vez)
     const primerDoc = docsParaActualizar[0];
     const primeraActividad = primerDoc.actividades.find(
@@ -3066,6 +3103,9 @@ REGLAS DE EVALUACIÓN
       • "Hice la mitad", "Avancé un 50%"
       • "Solo preparé el ambiente"
 
+
+      
+
 3️⃣ CASOS ESPECIALES Y GRISES
    🔸 Investigación/Análisis SIN código:
       • Si describe hallazgos concretos → COMPLETADA
@@ -3091,19 +3131,50 @@ REGLAS DE EVALUACIÓN
       • "empezamos a documentar en Word" con resultado guardado → COMPLETADA
 
 4️⃣ EXTRACCIÓN DEL MOTIVO (si NO está completada)
-   📌 IMPORTANTE: Identifica la razón ESPECÍFICA del no-completado
+   📌 IMPORTANTE: Solo extrae el motivo si el usuario LO MENCIONÓ EXPLÍCITAMENTE.
+   
+   ✅ Extrae motivo si dice:
+      • "no lo terminé porque el servidor estaba caído"
+      • "quedó pendiente, estoy esperando que el cliente mande las credenciales"
+      • "me bloqueé porque no tenía acceso"
+      ✅ TAMBIÉN extrae motivo de causas técnicas/externas:
+- "se me fue el internet" → motivoNoCompletado: "Falla de conexión a internet"
+- "no tenía luz" → motivoNoCompletado: "Corte de electricidad"  
+- "se colgó la computadora" → motivoNoCompletado: "Falla técnica del equipo"
+⚠️ Aunque el lenguaje sea informal, si la CAUSA es identificable → extráela.
 
-   Categorías de motivos:
-   • Bloqueo técnico: "No tenía acceso al servidor X"
-   • Bloqueo externo: "Esperando aprobación de cliente/gerencia"
-   • Falta información: "Falta especificación del diseño"
-   • Dependencia: "Bloqueado por tarea Y pendiente"
-   • Problema técnico: "Error en API externa sin resolver"
-   • Falta recursos: "No tengo permisos/credenciales necesarios"
-   • Priorización: "Se priorizó otra tarea más urgente"
-   • Default: "No especificó el motivo" (solo si no hay ninguna pista)
+   
+   ❌ NO extraigas motivo si solo dice:
+      • "no lo terminé"
+      • "no lo completé"
+      • "estuve intentando pero no pude"
+      • Cualquier frase sin causa explícita
 
-   FORMATO: Máximo 100 caracteres, frase clara y específica
+      ❌ NUNCA pongas estas frases como motivoNoCompletado, son inválidas:
+   • "No completada sin causa explícita mencionada"
+   • "No especificó el motivo"
+   • "Sin motivo mencionado"
+   • "No proporcionó causa"
+   • Cualquier frase que describa la AUSENCIA de motivo
+
+Si no hay causa explícita → motivoNoCompletado: null (sin excepción)
+   
+   Si no hay motivo explícito → motivoNoCompletado: null
+   (el sistema le preguntará al usuario en la siguiente fase)
+
+   ❌ NUNCA inventes o parafrasees el motivo. 
+Si el usuario no dijo explícitamente POR QUÉ, siempre → motivoNoCompletado: null
+
+❌ Estas respuestas son INVÁLIDAS como motivoNoCompletado:
+- "Falta específica mencionada"
+- "Causa no especificada"  
+- "Razón implícita"
+- Cualquier frase que NO sea una causa concreta dicha por el usuario
+
+✅ Solo es válido si el usuario dijo algo como:
+- "porque se me fue el internet"
+- "porque no tenía acceso"
+- "porque el cliente no respondió"
 
 5️⃣ EVALUACIÓN DE CALIDAD (0-100)
    90-100 pts: Explicación detallada con:
@@ -3253,17 +3324,73 @@ Respuesta:
   "preguntaAclaracion": "¿Ya pudiste verificar que todo funciona correctamente o aún falta revisarlo?",
   "motivoNoCompletado": null
 }
+
+EJEMPLO 6 - NO COMPLETADA SIN MOTIVO:
+Reporte: "No, no lo terminé. Estaba intentándolo pero no lo terminé."
+
+Respuesta:
+{
+  "completada": false,
+  "necesitaAclaracion": false,
+  "confianza": 0.9,
+  "razon": "El usuario indica explícitamente que no terminó pero no menciona causa",
+  "evidencias": ["no lo pudimos completar hoy"],
+  "calidadExplicacion": 10,
+  "feedbackMejora": "",
+  "preguntaAclaracion": null,
+  "motivoNoCompletado": null
+}
+
+EJEMPLO 7 - NO COMPLETADA CON MOTIVO EXPLÍCITO:
+Reporte: "No lo terminé porque el cliente no mandó las credenciales del servidor."
+
+Respuesta:
+{
+  "completada": false,
+  "necesitaAclaracion": false,
+  "confianza": 0.95,
+  "razon": "No completada, bloqueado por falta de credenciales del cliente",
+  "evidencias": ["no lo terminé", "cliente no mandó las credenciales"],
+  "calidadExplicacion": 75,
+  "feedbackMejora": "",
+  "preguntaAclaracion": null,
+  "motivoNoCompletado": "Cliente no proporcionó las credenciales del servidor"
+}
+
+EJEMPLO 8 - CLARAMENTE NO COMPLETADA (frases directas):
+Reporte: "no lo pude terminar completamente" / "no lo terminé" / 
+         "no lo logré" / "no alcancé a terminarlo"
+
+Respuesta:
+{
+  "completada": false,
+  "necesitaAclaracion": false,   ← NUNCA true si ya dijo que no terminó
+  "confianza": 0.9,
+  "motivoNoCompletado": null     ← null porque no dio causa explícita
+}
+
+⚠️ REGLA CRÍTICA: Si el usuario usa cualquier variante de 
+"no lo terminé / no pude terminar / no lo completé", 
+SIEMPRE es completada: false y necesitaAclaracion: false.
+El motivo se captura en una fase separada.
+
 ═══════════════════════════════════════════════════════════════════════════════
+
+CRÍTICO: Responde ÚNICAMENTE con el objeto JSON. Empieza con { y termina con }. Sin texto previo ni markdown.
 
 AHORA ANALIZA EL REPORTE PROPORCIONADO Y RESPONDE EN JSON:`;
 
     const aiResult = await smartAICall(prompt);
+
+
+    console.log("aiResult: ", aiResult)
 
     // Limpiar respuesta
     let textoLimpio = aiResult.text.trim();
     if (textoLimpio.includes('```')) {
       textoLimpio = textoLimpio.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
     }
+
 
     // Intentar parsear
     let validacion = {
@@ -3289,6 +3416,43 @@ AHORA ANALIZA EL REPORTE PROPORCIONADO Y RESPONDE EN JSON:`;
       console.warn('⚠️ Error parseando respuesta IA, usando valores por defecto');
     }
 
+    const motivosInvalidos = [
+      "no especificó",
+      "sin causa",
+      "sin motivo",
+      "no mencionó",
+      "no proporcionó",
+      "no completada sin",
+      "no hay causa",
+      "causa no mencionada",
+      "no indica motivo",
+      "no menciona causa",
+      "falta específica",
+      "falta de exito",
+      "bloqueado por falta",
+      "no especifica",
+      "razón no especificada",
+      "causa no especificada",
+      "motivo no especificado",
+      "no se menciona",
+      "no mencionada",
+      "sin información",
+      "información insuficiente",
+      "no proporcionó causa",
+      "mencionada",
+      "no explicitada",
+      "implícita",
+    ];
+
+    if (validacion.motivoNoCompletado) {
+      const motivoLower = validacion.motivoNoCompletado.toLowerCase();
+      const esInvalido = motivosInvalidos.some(frase => motivoLower.includes(frase));
+      if (esInvalido) {
+        console.warn("⚠️ Motivo inválido detectado y limpiado:", validacion.motivoNoCompletado);
+        validacion.motivoNoCompletado = null;
+      }
+    }
+
     const estaTerminada = typeof validacion.completada === 'boolean'
       ? validacion.completada
       : true;
@@ -3296,9 +3460,8 @@ AHORA ANALIZA EL REPORTE PROPORCIONADO Y RESPONDE EN JSON:`;
     const esValidadaPorIA = validacion.confianza >= 0.7 && validacion.calidadExplicacion >= 60;
 
 
-    const necesitaAclaracion =
-      validacion.necesitaAclaracion === true ||
-      (validacion.completada === null && validacion.confianza < 0.65);
+    const esAmbiguo = validacion.completada === null;
+    const necesitaAclaracion = esAmbiguo && validacion.necesitaAclaracion === true;
 
     if (necesitaAclaracion) {
       return res.status(200).json({
@@ -3413,7 +3576,6 @@ AHORA ANALIZA EL REPORTE PROPORCIONADO Y RESPONDE EN JSON:`;
 
         const resultado = await ActividadesSchema.findOneAndUpdate(
           {
-            // ✅ FIX: Usar _id del documento para garantizar que actualiza el correcto
             _id: actividadDoc._id,
             "actividades.actividadId": actividadId,
             "actividades.pendientes.pendienteId": pendienteId
@@ -3477,28 +3639,16 @@ AHORA ANALIZA EL REPORTE PROPORCIONADO Y RESPONDE EN JSON:`;
       }
     }
 
+
     // ==================== RESPUESTA ====================
     const respuestaFinal = {
       success: true,
       completada: estaTerminada,
-      confianza: validacion.confianza || 0.8,
-      razon: validacion.razon || "Tarea analizada",
-      evidencias: validacion.evidencias || [],
-      calidadExplicacion: validacion.calidadExplicacion || 70,
-      feedbackMejora: validacion.feedbackMejora || "",
-      validadaPorIA: esValidadaPorIA,
-      motivoNoCompletado: !estaTerminada ? (validacion.motivoNoCompletado || null) : null,
-      message: estaTerminada
-        ? "✅ Tarea marcada como completada"
-        : `⏳ Tarea marcada como no completada${validacion.motivoNoCompletado ? ': ' + validacion.motivoNoCompletado : ''}`,
-      guardadoEn: resultadosGuardado,
-      totalUsuariosActualizados: resultadosGuardado.filter(r => r.guardadoExitoso).length,
-      metadata: {
-        sessionId: sessionId || `session-${Date.now()}`,
-        fechaRegistro: fechaActual,
-        emailUsuario: emailUsuario,
-        actividadCompletada: resultadosGuardado.length > 0
-      }
+      motivoYaCapturado: !estaTerminada && !!validacion.motivoNoCompletado,
+      requiereMejora: necesitaAclaracion,
+      preguntaAclaracion: necesitaAclaracion
+        ? (validacion.preguntaAclaracion || "¿Puedes dar más detalle sobre qué resultado obtuviste?")
+        : undefined,
     };
 
     return res.json(respuestaFinal);

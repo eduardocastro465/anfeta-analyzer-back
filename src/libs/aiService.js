@@ -17,6 +17,9 @@ const clavesValidas = [GROQ_API_KEY_1, GROQ_API_KEY_2, GROQ_API_KEY_3]
 const poolGroq = clavesValidas.map(key => new Groq({ apiKey: key }));
 let indiceActual = 0;
 
+console.log("[AI Service] Claves Groq disponibles:", poolGroq.length > 0 ? `${poolGroq.length} clave(s) activa(s)` : "NINGUNA - se usara Gemini como fallover");
+console.log("[AI Service] Proveedor principal:", poolGroq.length > 0 ? "Groq" : "Gemini");
+
 /* ===============================
    GROQ (PRIMARY)
 ================================ */
@@ -82,14 +85,19 @@ export async function smartAICall(prompt) {
             throw new Error("NO_GROQ_KEYS");
         }
 
-        return await llamarGroq(prompt);
+        const resultado = await llamarGroq(prompt);
+        console.log(`[AI] Respondio: Groq (indice ${(indiceActual === 0 ? poolGroq.length : indiceActual) - 1})`);
+        return resultado;
 
     } catch (groqError) {
-        console.warn(" Groq falló, usando Gemini:", groqError.message);
+        console.warn("[AI] Groq fallo:", groqError.message, "-> usando Gemini como fallover");
 
         try {
-            return await llamarGemini(prompt);
+            const resultado = await llamarGemini(prompt);
+            console.log("[AI] Respondio: Gemini (fallover)");
+            return resultado;
         } catch (geminiError) {
+            console.error("[AI] Ambos proveedores fallaron.", { groq: groqError.message, gemini: geminiError.message });
             const err = new Error("AI_PROVIDER_FAILED");
             err.cause = {
                 groq: groqError?.message || groqError,
@@ -108,29 +116,43 @@ export async function smartAICall(prompt) {
 export function parseAIJSONSafe(text) {
     if (!text) return null;
 
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+
+    try {
+        return JSON.parse(match[0]);
+    } catch {
+        console.warn("parseAIJSONSafe fallido:", err.message);
+        return null;
+    }
+}
+export function parseRespuestaConversacional(text) {
+    if (!text) return null;
+
     const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
     const cleaned = fenceMatch ? fenceMatch[1].trim() : text.trim();
 
     const candidates = [
         cleaned,
-        cleaned.match(/\{[\s\S]*?\}/)?.[0], // no greedy
+        cleaned.match(/\{[\s\S]*\}/)?.[0],
     ].filter(Boolean);
 
     for (const candidate of candidates) {
         try {
             const parsed = JSON.parse(candidate);
 
-            // Validación estructural mínima
             if (
                 parsed &&
                 typeof parsed === "object" &&
-                typeof parsed.esValida === "boolean" &&
-                typeof parsed.razon === "string"
+                typeof parsed.deteccion === "string" &&
+                typeof parsed.razon === "string" &&
+                typeof parsed.respuesta === "string"
             ) {
                 return parsed;
             }
+
         } catch (err) {
-            console.warn("Parse fallido:", err.message);
+            console.warn("Parse conversacional fallido:", err.message);
         }
     }
 
