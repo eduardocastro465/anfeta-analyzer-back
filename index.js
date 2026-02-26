@@ -32,7 +32,8 @@ const io = new Server(server, {
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE"]
   },
-  transports: ["websocket", "polling"]
+  transports: ["websocket", "polling"],
+  maxHttpBufferSize: 1e7,
 });
 
 // Inicializar servicio de notificaciones ← NUEVO
@@ -49,7 +50,11 @@ app.use((req, res, next) => {
 io.on("connection", (socket) => {
   console.log("Cliente conectado:", socket.id);
 
-  registerVoskSocket(socket); 
+  socket.onAny((event, ...args) => {
+    console.log(`[onAny] evento="${event}" socketId=${socket.id}`);
+  });
+
+  registerVoskSocket(socket);
 
   // Registrar usuario por email
   socket.on("registrar", (email) => {

@@ -48,10 +48,11 @@ const sessions = new Map();
 export function registerVoskSocket(socket) {
   // ── vosk-start ────────────────────────────────────────────────────────
   socket.on("vosk-start", () => {
+    console.log("[Vosk] vosk-start recibido");
     try {
       // Limpiar sesión previa si existe
       if (sessions.has(socket.id)) {
-        try { sessions.get(socket.id).free(); } catch {}
+        try { sessions.get(socket.id).free(); } catch { }
         sessions.delete(socket.id);
       }
 
@@ -71,11 +72,14 @@ export function registerVoskSocket(socket) {
   // ── vosk-chunk ────────────────────────────────────────────────────────
   // Recibe un chunk de audio PCM16 como ArrayBuffer y emite texto parcial
   socket.on("vosk-chunk", (arrayBuffer) => {
+    console.log(`[Vosk] chunk recibido: tipo=${arrayBuffer?.constructor?.name} tamaño=${arrayBuffer?.byteLength ?? arrayBuffer?.length}`);
     const rec = sessions.get(socket.id);
     if (!rec) return;
 
     try {
-      const buffer = Buffer.from(arrayBuffer);
+      const buffer = Buffer.isBuffer(arrayBuffer)
+        ? arrayBuffer
+        : Buffer.from(arrayBuffer instanceof ArrayBuffer ? arrayBuffer : Buffer.from(arrayBuffer));
 
       // acceptWaveform devuelve true cuando hay un resultado final de frase
       const isFinal = rec.acceptWaveform(buffer);
@@ -106,7 +110,7 @@ export function registerVoskSocket(socket) {
 
     try {
       rec.free();
-    } catch {}
+    } catch { }
 
     sessions.delete(socket.id);
     console.log(`[Vosk] Sesión terminada: ${socket.id}`);
@@ -116,7 +120,7 @@ export function registerVoskSocket(socket) {
   socket.on("disconnect", () => {
     const rec = sessions.get(socket.id);
     if (rec) {
-      try { rec.free(); } catch {}
+      try { rec.free(); } catch { }
       sessions.delete(socket.id);
     }
   });
