@@ -5,6 +5,7 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
+    "build": "node scripts/downloadModel.js",
     "dev": "cross-env NODE_ENV=development nodemon ./index.js",
     "start": "node ./index.js"
   },
