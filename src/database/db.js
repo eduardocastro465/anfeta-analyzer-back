@@ -33,7 +33,7 @@ export const connectDB = async () => {
       ["rgb(255, 0, 0)", "rgb(255, 69, 0)"],
       modoProduction
     );
-    console.error(error);
+    console.log(error);
     process.exit(1);
   }
 };

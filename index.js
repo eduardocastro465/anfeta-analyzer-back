@@ -1,4 +1,7 @@
 import "dotenv/config";
+import dns from "dns";
+dns.setServers(["8.8.8.8", "8.8.4.4"]);
+
 import express from "express";
 import cors from "cors";
 import morgan from "morgan";
@@ -10,6 +13,7 @@ import { textoColorido } from "./src/utils/colorText.js";
 import { CORS_ORIGINS, API_VERSION } from "./src/config.js";
 import { connectDB } from "./src/database/db.js";
 import NotificationService from "./src/services/notificationService.js"; // ← NUEVO
+import { registerVoskSocket } from "./src/services/voskRealtimeService.js";
 
 // Constantes
 const modoProduction = process.env.NODE_ENV === "production";
@@ -45,13 +49,15 @@ app.use((req, res, next) => {
 io.on("connection", (socket) => {
   console.log("Cliente conectado:", socket.id);
 
+  registerVoskSocket(socket); 
+
   // Registrar usuario por email
   socket.on("registrar", (email) => {
     if (email) {
       socket.join(`usuario:${email}`);
       console.log(`Usuario ${email} registrado en sala usuario:${email}`);
-      socket.emit("registrado", { 
-        email, 
+      socket.emit("registrado", {
+        email,
         sala: `usuario:${email}`,
         historial: notificationService.getUserNotifications(email) // ← NUEVO
       });
@@ -62,7 +68,7 @@ io.on("connection", (socket) => {
         mensaje: 'Te has conectado correctamente al sistema de notificaciones',
         timestamp: new Date().toISOString()
       });
-      
+
       notificationService.sendToUser(email, bienvenida);
     }
   });
@@ -141,11 +147,13 @@ import adminRouter from "./src/routes/admin.routes.js";
 import assistantRoutes from "./src/routes/assistant.routes.js";
 import authRoutes from "./src/routes/auth.routes.js";
 import reportesRoutes from "./src/routes/reportes.routes.js";
+import transcribeRoutes from "./src/routes/transcribe.route.js";
 
 app.use(`/api/${API_VERSION}/assistant`, assistantRoutes);
 app.use(`/api/${API_VERSION}/admin`, adminRouter);
 app.use(`/api/${API_VERSION}/auth`, authRoutes);
 app.use(`/api/${API_VERSION}/reportes`, reportesRoutes);
+app.use(`/api/${API_VERSION}/transcribe`, transcribeRoutes);
 
 // Server
 server.listen(PORT, "0.0.0.0", () => {
