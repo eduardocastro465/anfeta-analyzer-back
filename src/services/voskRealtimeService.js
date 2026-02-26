@@ -35,11 +35,11 @@ function getModel() {
   return model;
 }
 
-try {
-  getModel();
-} catch (err) {
-  console.error("[Vosk] Error cargando modelo:", err.message);
-}
+// try {
+//   getModel();
+// } catch (err) {
+//   console.error("[Vosk] Error cargando modelo:", err.message);
+// }
 
 // ── Sesiones activas: socketId → Recognizer ────────────────────────────────
 const sessions = new Map();
