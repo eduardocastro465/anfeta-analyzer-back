@@ -9,6 +9,7 @@ import { Server } from "socket.io";
 import { textoColorido } from "./src/utils/colorText.js";
 import { CORS_ORIGINS, API_VERSION } from "./src/config.js";
 import { connectDB } from "./src/database/db.js";
+import { registerVoskSocket } from "./src/services/voskRealtimeService.js";
 import NotificationService from "./src/services/notificationService.js"; // ← NUEVO
 
 // Constantes
