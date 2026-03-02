@@ -346,7 +346,8 @@ export async function getActividadesConRevisiones(req, res) {
   try {
     const {
       question = "¿Qué actividades y revisiones tengo hoy? ¿Qué me recomiendas priorizar?",
-      showAll = false
+      showAll = false,
+      consultarAlApi = false
     } = sanitizeObject(req.body);
 
 
@@ -385,7 +386,7 @@ export async function getActividadesConRevisiones(req, res) {
     console.log(`📅 Primera consulta del día [${email}]:`, esPrimeraConsultaDelDia);
 
 
-    if (!esPrimeraConsultaDelDia) {
+    if (!esPrimeraConsultaDelDia && !consultarAlApi) {
       return getActividadesDesdeDB(req, res);
     }
 
