@@ -5,6 +5,7 @@ const explicacionVozSchema = new mongoose.Schema(
   {
     texto: String,
     emailUsuario: String,
+    resumen: String,
     fechaRegistro: { type: Date, default: Date.now },
     validadaPorIA: { type: Boolean, default: false },
     razonIA: String,
@@ -26,6 +27,7 @@ const historialExplicacionSchema = new mongoose.Schema(
   {
     texto: String,
     emailUsuario: String,
+    resumen: String,
     fecha: { type: Date, default: Date.now },
     validadaPorIA: { type: Boolean, default: false },
     razonIA: String,

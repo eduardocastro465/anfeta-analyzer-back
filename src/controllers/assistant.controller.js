@@ -727,7 +727,7 @@ EJEMPLO FORMATO:
 "6 pendientes, ~4h con Nnico.
 prioriza 1 o 2
 Sin pendientes urgentes."
-`.trim();
+`.trim(); 
 
       aiResult = await smartAICall(promptGenerado);
     }
@@ -808,6 +808,7 @@ Sin pendientes urgentes."
                 ...tarea,
                 descripcion: pendienteGuardado?.descripcion || "",
                 explicacionVoz: pendienteGuardado?.explicacionVoz || null,
+                resumen: pendienteGuardado?.resumen || pendienteGuardado?.explicacionVoz?.resumen || null,
                 esNueva: esTareaNueva
               };
             }),
@@ -818,7 +819,8 @@ Sin pendientes urgentes."
               return {
                 ...t,
                 descripcion: pendienteGuardado?.descripcion || "",
-                explicacionVoz: pendienteGuardado?.explicacionVoz || null
+                explicacionVoz: pendienteGuardado?.explicacionVoz || null,
+                resumen: pendienteGuardado?.resumen || pendienteGuardado?.explicacionVoz?.resumen || null,
               };
             }),
             tareasSinTiempo: revisiones.pendientesSinTiempo || [],
@@ -947,6 +949,7 @@ RESPONDE SOLO EL TITULO
             nombre: t.nombre,
             descripcion: pendienteExistente?.descripcion || "",
             queHizo: pendienteExistente?.queHizo || "",
+            resumen: pendienteExistente?.explicacionVoz?.resumen || null,
             revisadoPorVoz: pendienteExistente?.revisadoPorVoz || false,
             historialExplicaciones: pendienteExistente?.historialExplicaciones || [],
             explicacionVoz: pendienteExistente?.explicacionVoz || null,
@@ -1723,8 +1726,8 @@ export async function validarYGuardarExplicacion(req, res) {
     const odooUserId = decoded.id;
     const odooUserEmail = decoded.email;
 
-    // Validar con IA
-    const prompt = `
+    // ─── 1. VALIDAR CON IA ────────────────────────────────────────────────────
+    const promptValidacion = `
 Eres un sistema de validación estricto.
 
 Tu tarea es determinar si una explicación corresponde de forma directa, específica y clara al pendiente indicado.
@@ -1760,13 +1763,11 @@ Responde exclusivamente en formato JSON:
 }
 `;
 
-    const aiResult = await smartAICall(prompt);
+    const aiValidacion = await smartAICall(promptValidacion);
 
-    if (!aiResult || !aiResult.text) {
+    if (!aiValidacion || !aiValidacion.text) {
       console.error("❌ La IA no respondió correctamente");
 
-      /*Agrregacion de servicio para*/
-      // 🔔 NOTIFICACIÓN DE ERROR
       if (req.notificationService) {
         await req.notificationService.sendToUser(odooUserEmail,
           req.notificationService.createNotification('error', {
@@ -1776,23 +1777,17 @@ Responde exclusivamente en formato JSON:
         );
       }
 
-
       return res.status(503).json({
         esValida: false,
         razon: "La IA no respondió correctamente. Intenta nuevamente."
       });
     }
 
-    console.log(aiResult)
-    const aiEvaluation = parseAIJSONSafe(aiResult.text);
-
-    console.log(aiEvaluation)
-
+    console.log(aiValidacion);
+    const aiEvaluation = parseAIJSONSafe(aiValidacion.text);
+    console.log(aiEvaluation);
 
     if (!aiEvaluation.esValida) {
-
-
-      // 🔔 NOTIFICACIÓN DE VALIDACIÓN FALLIDA
       if (req.notificationService) {
         await req.notificationService.sendToUser(odooUserEmail,
           req.notificationService.createNotification('warning', {
@@ -1813,17 +1808,52 @@ Responde exclusivamente en formato JSON:
       });
     }
 
-    // PREPARAR DATOS PARA GUARDAR
+    // ─── 2. GENERAR RESUMEN (solo si la explicación es válida) ───────────────
+    let resumenExplicacion = null;
+
+    try {
+      const promptResumen = `
+Eres un asistente que genera resúmenes ejecutivos breves de reportes de trabajo.
+
+TAREA: "${nombrePendiente}"
+ACTIVIDAD: "${actividadTitulo}"
+REPORTE DEL USUARIO (voz a texto, puede tener errores de transcripción): "${explicacion}"
+
+Genera un resumen claro y profesional de lo que el usuario hizo o planea hacer.
+
+Reglas:
+- Máximo 2 oraciones.
+- Usa tercera persona: "El usuario...", "Se realizó...", "Se llevó a cabo...".
+- Corrige errores obvios de transcripción de voz a texto.
+- No agregues información que no esté en el reporte.
+- Si el reporte es muy corto, resúmelo tal cual con lenguaje profesional.
+
+Responde SOLO con el texto del resumen, sin JSON ni marcadores.
+`.trim();
+
+      const aiResumen = await smartAICall(promptResumen);
+
+      if (aiResumen?.text) {
+        resumenExplicacion = aiResumen.text.trim();
+        console.log("📝 Resumen generado:", resumenExplicacion);
+      }
+    } catch (resumenError) {
+      // El resumen es complementario — si falla, no bloqueamos el guardado
+      console.warn("⚠️ No se pudo generar el resumen, continuando sin él:", resumenError.message);
+    }
+
+    // ─── 3. PREPARAR DATOS PARA GUARDAR ──────────────────────────────────────
     const emailUsuario = odooUserEmail || "email-no-proporcionado";
     const fechaActual = new Date();
 
     const datosExplicacion = {
       texto: explicacion,
+      resumen: resumenExplicacion,          // ← resumen agregado
       emailUsuario: emailUsuario,
       fechaRegistro: fechaActual,
       validadaPorIA: true,
       razonIA: aiEvaluation.razon,
-      originalPor: emailUsuario, // ✅ registrar autor original
+      originalPor: emailUsuario,
       metadata: {
         sessionId: sessionId,
         duracionMin: duracionMin || duration,
@@ -1833,7 +1863,7 @@ Responde exclusivamente en formato JSON:
       }
     };
 
-    // ACTUALIZACIÓN COMPLETA
+    // ─── 4. ACTUALIZACIÓN COMPLETA ────────────────────────────────────────────
     const resultado = await ActividadesSchema.findOneAndUpdate(
       {
         odooUserId,
@@ -1842,9 +1872,7 @@ Responde exclusivamente en formato JSON:
       },
       {
         $set: {
-          // Descripción con autor incluido
           "actividades.$[act].pendientes.$[pend].descripcion": `${explicacion} (por ${emailUsuario})`,
-
           "actividades.$[act].pendientes.$[pend].explicacionVoz": datosExplicacion,
 
           // Metadatos de actividad
@@ -1871,6 +1899,7 @@ Responde exclusivamente en formato JSON:
         $push: {
           "actividades.$[act].pendientes.$[pend].historialExplicaciones": {
             texto: explicacion,
+            resumen: resumenExplicacion,    // ← resumen también en el historial
             emailUsuario,
             fecha: fechaActual,
             validadaPorIA: true,
@@ -1909,10 +1938,11 @@ Responde exclusivamente en formato JSON:
       });
       console.log("🔎 Documento con pendienteId existe:", existePendiente ? "sí" : "no");
     }
+
     const actividadActualizada = resultado.actividades.find(a => a.actividadId === actividadId);
     const pendienteGuardado = actividadActualizada?.pendientes.find(p => p.pendienteId === idPendiente);
 
-    // Sincronizar con otros usuarios
+    // ─── 5. SINCRONIZAR CON OTROS USUARIOS ───────────────────────────────────
     await ActividadesSchema.updateMany(
       {
         odooUserId: { $ne: odooUserId },
@@ -1933,13 +1963,14 @@ Responde exclusivamente en formato JSON:
           "actividades.$[act].fechaRevisionVoz": fechaActual,
           ...(priority && { "actividades.$[act].pendientes.$[pend].prioridad": priority }),
           ...(duracionMin && { "actividades.$[act].pendientes.$[pend].duracionMin": duracionMin }),
-          "analisisGuardado.vigente": false,              // ← agrega esto
+          "analisisGuardado.vigente": false,
           "analisisGuardado.ultimaInvalidacion": fechaActual,
           "analisisGuardado.razonInvalidacion": "Explicación guardada por compañero"
         },
         $push: {
           "actividades.$[act].pendientes.$[pend].historialExplicaciones": {
             texto: explicacion,
+            resumen: resumenExplicacion,    // ← resumen en historial de otros usuarios también
             emailUsuario,
             fecha: fechaActual,
             validadaPorIA: true,
@@ -1975,11 +2006,8 @@ Responde exclusivamente en formato JSON:
       }
     });
 
-
-
-    // 🔔 NOTIFICACIÓN DE ÉXITO al usuario que guardó
+    // ─── 6. NOTIFICACIONES ────────────────────────────────────────────────────
     if (req.notificationService) {
-      // Notificación personal para el que guardó
       await req.notificationService.sendToUser(emailUsuario,
         req.notificationService.createNotification('success', {
           titulo: 'Reporte guardado',
@@ -1992,9 +2020,7 @@ Responde exclusivamente en formato JSON:
         })
       );
 
-      // 🔔 NOTIFICACIÓN A ADMINISTRADORES (opcional)
-      // Si quieres notificar a admins cuando alguien reporta
-      const admins = ['admin1@email.com', 'admin2@email.com']; // Obtén esto de tu BD
+      const admins = ['admin1@email.com', 'admin2@email.com'];
       await req.notificationService.sendToMany(admins,
         req.notificationService.createNotification('info', {
           titulo: 'Nuevo reporte de actividad',
@@ -2003,7 +2029,7 @@ Responde exclusivamente en formato JSON:
       );
     }
 
-    // Preparar respuesta
+    // ─── 7. RESPUESTA ─────────────────────────────────────────────────────────
     return res.status(200).json({
       esValida: true,
       mensaje: "Explicación validada y guardada exitosamente",
@@ -2011,7 +2037,12 @@ Responde exclusivamente en formato JSON:
         emailUsuario,
         actividad: { id: actividadId, titulo: actividadTitulo },
         pendiente: { id: idPendiente, nombre: nombrePendiente },
-        explicacion: { texto: explicacion, duracion: duracionMin || duration, prioridad: priority },
+        explicacion: {
+          texto: explicacion,
+          resumen: resumenExplicacion,      // ← expuesto en la respuesta al cliente
+          duracion: duracionMin || duration,
+          prioridad: priority
+        },
         timestamp: fechaActual.toISOString(),
         validacionIA: { esValida: true, razon: aiEvaluation.razon }
       },
@@ -2019,7 +2050,8 @@ Responde exclusivamente en formato JSON:
         sessionId,
         totalExplicacionesGuardadas: pendienteGuardado?.historialExplicaciones?.length || 1,
         fechaProcesamiento: new Date().toISOString(),
-        analisisInvalidado: resultado.analisisGuardado?.vigente === false
+        analisisInvalidado: resultado.analisisGuardado?.vigente === false,
+        resumenGenerado: resumenExplicacion !== null  // ← indica si se generó o no
       }
     });
 
@@ -3058,327 +3090,87 @@ export async function guardarExplicacionesTarde(req, res) {
     }
 
     // ==================== ANÁLISIS CON IA (UNA SOLA VEZ) ====================
-    const prompt = `Eres un asistente experto en análisis de reportes laborales. Analiza el siguiente reporte de trabajo y determina si la tarea se completó exitosamente.
+    const prompt = `Eres un analizador experto de reportes laborales. Evalúa si una tarea fue completada basándote ÚNICAMENTE en lo que el usuario describió.
 
-    ═══════════════════════════════════════════════════════════════════════════════
-INFORMACIÓN DE LA TAREA
-═══════════════════════════════════════════════════════════════════════════════
-NOMBRE: "${primerPendiente.nombre}"
-DESCRIPCIÓN ORIGINAL: "${primerPendiente.descripcion || 'Sin descripción previa'}"
-REPORTE DEL USUARIO: "${queHizo}"
+━━━ CONTEXTO ━━━
+TAREA: "${primerPendiente.nombre}"
+DESCRIPCIÓN: "${primerPendiente.descripcion || 'Sin descripción'}"
+REPORTE: "${queHizo}"
 
-═══════════════════════════════════════════════════════════════════════════════
-REGLAS DE EVALUACIÓN
-═══════════════════════════════════════════════════════════════════════════════
+━━━ LÓGICA DE EVALUACIÓN ━━━
 
-1️⃣ CRITERIOS PARA MARCAR COMO COMPLETADA (true)
-   ✅ El usuario describe trabajo CONCRETO y FINALIZADO
-   ✅ Menciona resultados verificables o funcionales
-   ✅ Usa verbos en PASADO que indican finalización:
-      • "Terminé", "Completé", "Finalicé", "Implementé"
-      • "Corregí", "Arreglé", "Optimicé", "Creé"
-      • "Ya quedó", "Está listo", "Funciona correctamente"
-   ✅ Describe pruebas exitosas:
-      • "Lo probé y funciona"
-      • "Validé que está funcionando"
-      • "Ya está en producción"
-   ✅ Menciona entregables tangibles:
-      • "Subí el código", "Hice el deploy"
-      • "Envié el reporte", "Documenté el proceso"
+COMPLETADA (true) cuando el usuario:
+→ Usa verbos en pasado que indican finalización: terminé, completé, implementé, corregí, creé, subí, envié
+→ Menciona resultados verificables: "funciona", "está listo", "ya en producción", "lo probé y..."
+→ Describe entregables concretos aunque use lenguaje informal o coloquial
 
-2️⃣ CRITERIOS PARA MARCAR COMO NO COMPLETADA (false)
-   ❌ El usuario indica explícitamente que NO terminó
-   ❌ Menciona BLOQUEOS o PROBLEMAS sin resolver
-   ❌ Usa verbos que indican intento sin éxito:
-      • "Intenté pero...", "Traté de..."
-      • "Empecé pero...", "Iba a hacer pero..."
-   ❌ Menciona PENDIENTES explícitos:
-      • "Falta", "Aún no", "Todavía no"
-      • "Quedó pendiente", "No lo logré"
-   ❌ Describe bloqueos o dependencias:
-      • "Esperando aprobación/información/acceso"
-      • "No tengo permisos/credenciales"
-      • "Bloqueado por otra tarea/persona"
-   ❌ Avance parcial SIN entregable funcional:
-      • "Hice la mitad", "Avancé un 50%"
-      • "Solo preparé el ambiente"
+NO COMPLETADA (false) cuando el usuario:
+→ Dice explícitamente que no terminó: "no lo terminé", "no pude", "quedó pendiente"
+→ Describe bloqueos activos: esperando aprobación, sin acceso, dependencia sin resolver
+→ Indica avance parcial sin entregable: "empecé pero...", "iba a hacer pero..."
 
+NECESITA ACLARACIÓN (completada: null) cuando:
+→ No puedes determinar con certeza si terminó o no (confianza < 0.65)
+→ Lenguaje ambiguo que podría interpretarse de ambas formas
+→ NUNCA uses esto si el usuario ya dijo explícitamente que no terminó
 
-      
+RESPUESTA INVÁLIDA cuando:
+→ El reporte no describe trabajo: "ok", "gracias", "hola", pruebas de micrófono
+→ Menos de 3 palabras con contenido real
+→ Texto completamente irrelevante a cualquier tarea laboral
+→ En estos casos: completada: false, confianza: 0.0, calidadExplicacion: 0
 
-3️⃣ CASOS ESPECIALES Y GRISES
-   🔸 Investigación/Análisis SIN código:
-      • Si describe hallazgos concretos → COMPLETADA
-      • Si solo dice "investigué un poco" → NECESITA ACLARACIÓN
+━━━ REGLAS DE MOTIVO ━━━
 
-   🔸 Trabajo técnico detallado:
-      • Si menciona cambios específicos en archivos/código → COMPLETADA
-      • Si describe arquitectura/diseño implementado → COMPLETADA
-      • Si solo menciona "trabajé en..." sin detalles → NECESITA ACLARACIÓN
+motivoNoCompletado debe ser una causa REAL y EXPLÍCITA dicha por el usuario.
 
-   🔸 Correcciones/Bugfixes:
-      • Si confirma que el bug está resuelto → COMPLETADA
-      • Si solo identificó el problema → NECESITA ACLARACIÓN
+✅ Extrae el motivo si el usuario dijo la causa:
+   "porque el servidor estaba caído" → "Servidor caído"
+   "no tenía credenciales" → "Sin credenciales de acceso"
+   "se me fue el internet" → "Falla de conexión a internet"
 
-   🔸 Meetings/Reuniones:
-      • Si tomó decisiones/acuerdos concretos → COMPLETADA
-      • Si solo asistió sin conclusiones → NECESITA ACLARACIÓN
+❌ Devuelve null si:
+   → El usuario solo dijo que no terminó sin dar causa
+   → Quieres describir la AUSENCIA de motivo (nunca pongas "no especificó", "sin causa", "null" como string)
+   → No estás seguro de cuál fue la causa
 
-   🔸 ⚠️ IMPORTANTE - Lenguaje coloquial/informal (voz a texto):
-      • "lo que hicimos fue verificar X y documentar Y" → EVALÚA EL CONTENIDO, no el estilo
-      • Si el resultado final fue logrado (aunque lo digan informalmente) → COMPLETADA
-      • Muletillas como "básicamente", "o sea", "este" NO penalizan si el contenido es claro
-      • "empezamos a documentar en Word" con resultado guardado → COMPLETADA
+━━━ CALIDAD (0-100) ━━━
+90-100 → Detalles técnicos específicos + resultados medibles
+70-89  → Descripción clara con algunos detalles
+50-69  → Descripción vaga sin resultados concretos
+0-49   → Sin información útil o respuesta inválida
 
-4️⃣ EXTRACCIÓN DEL MOTIVO (si NO está completada)
-   📌 IMPORTANTE: Solo extrae el motivo si el usuario LO MENCIONÓ EXPLÍCITAMENTE.
-   
-   ✅ Extrae motivo si dice:
-      • "no lo terminé porque el servidor estaba caído"
-      • "quedó pendiente, estoy esperando que el cliente mande las credenciales"
-      • "me bloqueé porque no tenía acceso"
-      ✅ TAMBIÉN extrae motivo de causas técnicas/externas:
-- "se me fue el internet" → motivoNoCompletado: "Falla de conexión a internet"
-- "no tenía luz" → motivoNoCompletado: "Corte de electricidad"  
-- "se colgó la computadora" → motivoNoCompletado: "Falla técnica del equipo"
-⚠️ Aunque el lenguaje sea informal, si la CAUSA es identificable → extráela.
-
-   
-   ❌ NO extraigas motivo si solo dice:
-      • "no lo terminé"
-      • "no lo completé"
-      • "estuve intentando pero no pude"
-      • Cualquier frase sin causa explícita
-
-      ❌ NUNCA pongas estas frases como motivoNoCompletado, son inválidas:
-   • "No completada sin causa explícita mencionada"
-   • "No especificó el motivo"
-   • "Sin motivo mencionado"
-   • "No proporcionó causa"
-   • Cualquier frase que describa la AUSENCIA de motivo
-
-Si no hay causa explícita → motivoNoCompletado: null (sin excepción)
-   
-   Si no hay motivo explícito → motivoNoCompletado: null
-   (el sistema le preguntará al usuario en la siguiente fase)
-
-   ❌ NUNCA inventes o parafrasees el motivo. 
-Si el usuario no dijo explícitamente POR QUÉ, siempre → motivoNoCompletado: null
-
-❌ Estas respuestas son INVÁLIDAS como motivoNoCompletado:
-- "Falta específica mencionada"
-- "Causa no especificada"  
-- "Razón implícita"
-- Cualquier frase que NO sea una causa concreta dicha por el usuario
-
-✅ Solo es válido si el usuario dijo algo como:
-- "porque se me fue el internet"
-- "porque no tenía acceso"
-- "porque el cliente no respondió"
-
-5️⃣ EVALUACIÓN DE CALIDAD (0-100)
-   90-100 pts: Explicación detallada con:
-      • Verbos de acción específicos
-      • Resultados medibles/verificables
-      • Menciona archivos/componentes/funcionalidades concretas
-      • Describe el impacto o beneficio logrado
-
-   70-89 pts: Explicación clara con:
-      • Describe qué se hizo
-      • Menciona algunos detalles técnicos
-      • Falta profundidad o contexto completo
-
-   50-69 pts: Explicación vaga con:
-      • Descripción general sin detalles
-      • Usa muletillas ("este", "pues", "entonces")
-      • No menciona resultados concretos
-
-   0-49 pts: Explicación muy pobre:
-      • Solo dice "lo hice" sin explicar
-      • Texto muy corto (<20 caracteres)
-      • No aporta información útil
-
-6️⃣ DETECCIÓN DE RESPUESTAS INVÁLIDAS
-   ⚠️ Si el reporte contiene SOLO estas frases, márcalo como NO COMPLETADA con baja calidad:
-   • "ok", "sí", "no", "bien", "gracias"
-   • "listo", "perfecto", "entendido"
-   • Menos de 3 palabras
-   • Solo muletillas sin contenido
-
-7️⃣ CUÁNDO PEDIR ACLARACIÓN (necesitaAclaracion: true)
-   🔶 Úsalo cuando NO puedas determinar con certeza si se completó:
-   • Descripción vaga pero hay intención de trabajo real
-   • Lenguaje ambiguo que podría interpretarse de ambas formas
-   • confianza < 0.65 Y no hay señales claras de no-completado
-   • El usuario habla en futuro o presente sin confirmar resultado
-
-   En estos casos:
-   • completada: null
-   • necesitaAclaracion: true
-   • preguntaAclaracion: una pregunta corta, amable y específica
-     Ejemplo: "¿Ya pudiste verificar que funcionaba o aún falta?"
-              "¿El proceso quedó terminado o falta algún paso?"
-              "¿Qué resultado obtuviste al finalizar?"
-
-   ⚠️ Solo usa completada: false cuando el usuario EXPLÍCITAMENTE
-   diga que no terminó, tiene bloqueos, o quedó pendiente.
-
-═══════════════════════════════════════════════════════════════════════════════
-INSTRUCCIONES DE RESPUESTA
-═══════════════════════════════════════════════════════════════════════════════
-
-Analiza el reporte cuidadosamente y responde ÚNICAMENTE en formato JSON:
-
+━━━ RESPONDE SOLO EN JSON ━━━
 {
-  "completada": boolean o null,
+  "completada": boolean | null,
   "necesitaAclaracion": boolean,
-  "confianza": number (0.0 a 1.0),
-  "razon": "Explicación breve de tu evaluación (máx 200 caracteres)",
-  "evidencias": ["frase clave 1", "frase clave 2", "frase clave 3"],
-  "calidadExplicacion": number (0 a 100),
-  "feedbackMejora": "Sugerencia constructiva para mejorar el reporte (o vacío si está excelente)",
-  "preguntaAclaracion": "Pregunta concreta si necesitaAclaracion es true, o null",
-  "motivoNoCompletado": "Motivo específico si false, o null si true o null"
+  "confianza": number,
+  "razon": "string (máx 150 chars)",
+  "evidencias": ["frase 1", "frase 2"],
+  "calidadExplicacion": number,
+  "feedbackMejora": "string o vacío",
+  "preguntaAclaracion": "string si necesitaAclaracion, si no null",
+  "motivoNoCompletado": "causa explícita del usuario o null"
 }
 
-═══════════════════════════════════════════════════════════════════════════════
-EJEMPLOS DE ANÁLISIS
-═══════════════════════════════════════════════════════════════════════════════
+━━━ EJEMPLOS RÁPIDOS ━━━
 
-EJEMPLO 1 - COMPLETADA:
-Reporte: "Implementé la validación de formularios en el componente LoginForm.tsx. Agregué Zod para el schema y ahora valida email, contraseña (mínimo 8 caracteres) y muestra errores en tiempo real. Lo probé y funciona correctamente."
+"Implementé validación con Zod, probé y funciona"
+→ completada: true, confianza: 0.95, calidad: 90
 
-Respuesta:
-{
-  "completada": true,
-  "necesitaAclaracion": false,
-  "confianza": 0.95,
-  "razon": "Describe implementación completa con detalles técnicos específicos y validación exitosa",
-  "evidencias": ["Implementé la validación", "Agregué Zod", "Lo probé y funciona correctamente"],
-  "calidadExplicacion": 92,
-  "feedbackMejora": "",
-  "preguntaAclaracion": null,
-  "motivoNoCompletado": null
-}
+"No lo terminé porque el cliente no mandó las credenciales"
+→ completada: false, confianza: 0.95, motivoNoCompletado: "Cliente no proporcionó credenciales"
 
-EJEMPLO 2 - NO COMPLETADA:
-Reporte: "Intenté conectar con la API de pagos pero no tengo las credenciales de producción. Quedó pendiente hasta que el cliente las proporcione."
+"No lo terminé"
+→ completada: false, confianza: 0.9, motivoNoCompletado: null
 
-Respuesta:
-{
-  "completada": false,
-  "necesitaAclaracion": false,
-  "confianza": 0.9,
-  "razon": "Bloqueado por falta de credenciales externas",
-  "evidencias": ["no tengo las credenciales", "Quedó pendiente"],
-  "calidadExplicacion": 75,
-  "feedbackMejora": "Menciona qué pasos alternativos tomaste mientras esperas las credenciales",
-  "preguntaAclaracion": null,
-  "motivoNoCompletado": "Falta credenciales de producción del cliente"
-}
+"Estuve viendo cómo hacerlo"
+→ completada: null, necesitaAclaracion: true, preguntaAclaracion: "¿Pudiste completarlo o quedó pendiente?"
 
-EJEMPLO 3 - REPORTE INFORMAL/VOZ (COMPLETADA):
-Reporte: "Bueno, lo que hicimos básicamente fue, pues, ya sabes, verificamos la información disponible, igual documentamos lo que viene siendo la parte del proyecto y eso, empezamos a documentar en un archivo en Word."
+"hola me escuchas / ok / gracias"
+→ completada: false, confianza: 0.0, calidad: 0, motivoNoCompletado: null
 
-Respuesta:
-{
-  "completada": true,
-  "necesitaAclaracion": false,
-  "confianza": 0.78,
-  "razon": "Describe verificación de información y documentación en Word completadas, aunque con lenguaje informal",
-  "evidencias": ["verificamos la información disponible", "documentamos", "documentar en un archivo en Word"],
-  "calidadExplicacion": 55,
-  "feedbackMejora": "Especifica qué información verificaste y qué contenido documentaste en Word",
-  "preguntaAclaracion": null,
-  "motivoNoCompletado": null
-}
-
-EJEMPLO 4 - RESPUESTA INVÁLIDA:
-Reporte: "Gracias."
-
-Respuesta:
-{
-  "completada": false,
-  "necesitaAclaracion": false,
-  "confianza": 0.95,
-  "razon": "Respuesta inválida: no describe trabajo realizado",
-  "evidencias": [],
-  "calidadExplicacion": 5,
-  "feedbackMejora": "Por favor describe específicamente qué trabajo realizaste en esta tarea",
-  "preguntaAclaracion": null,
-  "motivoNoCompletado": "No proporcionó explicación válida"
-}
-
-EJEMPLO 5 - NECESITA ACLARACIÓN:
-Reporte: "Bueno escucha principalmente, quiero ver si todo funciona correctamente."
-
-Respuesta:
-{
-  "completada": null,
-  "necesitaAclaracion": true,
-  "confianza": 0.4,
-  "razon": "No queda claro si ya realizó la verificación o aún la tiene pendiente",
-  "evidencias": [],
-  "calidadExplicacion": 30,
-  "feedbackMejora": "Indica si ya verificaste que funciona o si aún falta hacerlo",
-  "preguntaAclaracion": "¿Ya pudiste verificar que todo funciona correctamente o aún falta revisarlo?",
-  "motivoNoCompletado": null
-}
-
-EJEMPLO 6 - NO COMPLETADA SIN MOTIVO:
-Reporte: "No, no lo terminé. Estaba intentándolo pero no lo terminé."
-
-Respuesta:
-{
-  "completada": false,
-  "necesitaAclaracion": false,
-  "confianza": 0.9,
-  "razon": "El usuario indica explícitamente que no terminó pero no menciona causa",
-  "evidencias": ["no lo pudimos completar hoy"],
-  "calidadExplicacion": 10,
-  "feedbackMejora": "",
-  "preguntaAclaracion": null,
-  "motivoNoCompletado": null
-}
-
-EJEMPLO 7 - NO COMPLETADA CON MOTIVO EXPLÍCITO:
-Reporte: "No lo terminé porque el cliente no mandó las credenciales del servidor."
-
-Respuesta:
-{
-  "completada": false,
-  "necesitaAclaracion": false,
-  "confianza": 0.95,
-  "razon": "No completada, bloqueado por falta de credenciales del cliente",
-  "evidencias": ["no lo terminé", "cliente no mandó las credenciales"],
-  "calidadExplicacion": 75,
-  "feedbackMejora": "",
-  "preguntaAclaracion": null,
-  "motivoNoCompletado": "Cliente no proporcionó las credenciales del servidor"
-}
-
-EJEMPLO 8 - CLARAMENTE NO COMPLETADA (frases directas):
-Reporte: "no lo pude terminar completamente" / "no lo terminé" / 
-         "no lo logré" / "no alcancé a terminarlo"
-
-Respuesta:
-{
-  "completada": false,
-  "necesitaAclaracion": false,   ← NUNCA true si ya dijo que no terminó
-  "confianza": 0.9,
-  "motivoNoCompletado": null     ← null porque no dio causa explícita
-}
-
-⚠️ REGLA CRÍTICA: Si el usuario usa cualquier variante de 
-"no lo terminé / no pude terminar / no lo completé", 
-SIEMPRE es completada: false y necesitaAclaracion: false.
-El motivo se captura en una fase separada.
-
-═══════════════════════════════════════════════════════════════════════════════
-
-CRÍTICO: Responde ÚNICAMENTE con el objeto JSON. Empieza con { y termina con }. Sin texto previo ni markdown.
-
-AHORA ANALIZA EL REPORTE PROPORCIONADO Y RESPONDE EN JSON:`;
+IMPORTANTE: Responde ÚNICAMENTE con el JSON. Sin texto previo ni markdown.`;
 
     const aiResult = await smartAICall(prompt);
 
@@ -3416,52 +3208,10 @@ AHORA ANALIZA EL REPORTE PROPORCIONADO Y RESPONDE EN JSON:`;
       console.warn('⚠️ Error parseando respuesta IA, usando valores por defecto');
     }
 
-    const motivosInvalidos = [
-      "no especificó",
-      "sin causa",
-      "sin motivo",
-      "no mencionó",
-      "no proporcionó",
-      "no completada sin",
-      "no hay causa",
-      "causa no mencionada",
-      "no indica motivo",
-      "no menciona causa",
-      "falta específica",
-      "falta de exito",
-      "bloqueado por falta",
-      "no especifica",
-      "razón no especificada",
-      "causa no especificada",
-      "motivo no especificado",
-      "no se menciona",
-      "no mencionada",
-      "sin información",
-      "información insuficiente",
-      "no proporcionó causa",
-      "mencionada",
-      "no explicitada",
-      "implícita",
-    ];
-
-    if (validacion.motivoNoCompletado) {
-      const motivoLower = validacion.motivoNoCompletado.toLowerCase();
-      const esInvalido = motivosInvalidos.some(frase => motivoLower.includes(frase));
-      if (esInvalido) {
-        console.warn("⚠️ Motivo inválido detectado y limpiado:", validacion.motivoNoCompletado);
-        validacion.motivoNoCompletado = null;
-      }
-    }
-
-    const estaTerminada = typeof validacion.completada === 'boolean'
-      ? validacion.completada
-      : true;
-
-    const esValidadaPorIA = validacion.confianza >= 0.7 && validacion.calidadExplicacion >= 60;
-
-
-    const esAmbiguo = validacion.completada === null;
-    const necesitaAclaracion = esAmbiguo && validacion.necesitaAclaracion === true;
+    const necesitaAclaracion =
+      validacion.necesitaAclaracion === true ||
+      validacion.confianza < 0.6 ||
+      validacion.calidadExplicacion < 40;
 
     if (necesitaAclaracion) {
       return res.status(200).json({
@@ -3472,13 +3222,17 @@ AHORA ANALIZA EL REPORTE PROPORCIONADO Y RESPONDE EN JSON:`;
         calidadExplicacion: validacion.calidadExplicacion,
         razon: validacion.razon,
         preguntaAclaracion: validacion.preguntaAclaracion ||
-          "¿Puedes describir con más detalle qué resultado obtuviste?",
+          "No entendí bien tu respuesta. ¿Puedes explicar qué hiciste en esta tarea?",
         feedbackMejora: validacion.feedbackMejora || "",
-        message: "🎤 Necesitamos un poco más de detalle",
       });
     }
 
+    // 3. Solo si llegó aquí → calcular y guardar
+    const estaTerminada = typeof validacion.completada === 'boolean'
+      ? validacion.completada
+      : true;
 
+    const esValidadaPorIA = validacion.confianza >= 0.7 && validacion.calidadExplicacion >= 60;
 
     // ==================== GUARDAR EN TODOS LOS DOCUMENTOS ====================
     const fechaActual = new Date();

@@ -38,7 +38,6 @@ class NotificationService {
       // Verificar que el socket existe antes de emitir
       if (this.io && this.io.to) {
         this.io.to(`usuario:${email}`).emit('notificacion', notificationData);
-        console.log(`Notificacion enviada a ${email}:`, notificationData);
       } else {
         console.warn('Socket.io no disponible');
       }
@@ -87,7 +86,6 @@ class NotificationService {
         this.io.emit('broadcast', notificationData);
       }
 
-      console.log('Broadcast enviado:', notificationData);
       return notificationData;
     } catch (error) {
       console.error('Error en broadcast:', error);
