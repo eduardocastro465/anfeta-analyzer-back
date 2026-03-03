@@ -28,7 +28,14 @@ const memoriaSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 memoriaSchema.index({ odooUserId: 1 }, { unique: true });
-
+memoriaSchema.index(
+    { odooUserId: 1, ultimoAcceso: -1 },
+    { partialFilterExpression: { activa: true } }
+);
+memoriaSchema.index(
+    { ultimoAcceso: 1, activa: 1 },
+    { partialFilterExpression: { activa: true, relevancia: { $gt: 0.1 } } }
+);
 memoriaSchema.index({
     odooUserId: 1,
     activa: 1,
@@ -42,7 +49,7 @@ memoriaSchema.statics.obtenerActivas = async function (odooUserId, limite = 10) 
         activa: true
     })
         .sort({ relevancia: -1, ultimoAcceso: -1 })
-        .limit(limite);
+        .limit(limite).lean();
 };
 
 export default mongoose.model("Memoria", memoriaSchema);

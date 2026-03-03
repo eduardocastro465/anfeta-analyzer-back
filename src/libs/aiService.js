@@ -17,9 +17,6 @@ const clavesValidas = [GROQ_API_KEY_1, GROQ_API_KEY_2, GROQ_API_KEY_3]
 const poolGroq = clavesValidas.map(key => new Groq({ apiKey: key }));
 let indiceActual = 0;
 
-console.log("[AI Service] Claves Groq disponibles:", poolGroq.length > 0 ? `${poolGroq.length} clave(s) activa(s)` : "NINGUNA - se usara Gemini como fallover");
-console.log("[AI Service] Proveedor principal:", poolGroq.length > 0 ? "Groq" : "Gemini");
-
 /* ===============================
    GROQ (PRIMARY)
 ================================ */
@@ -86,18 +83,13 @@ export async function smartAICall(prompt) {
         }
 
         const resultado = await llamarGroq(prompt);
-        console.log(`[AI] Respondio: Groq (indice ${(indiceActual === 0 ? poolGroq.length : indiceActual) - 1})`);
         return resultado;
 
     } catch (groqError) {
-        console.warn("[AI] Groq fallo:", groqError.message, "-> usando Gemini como fallover");
-
         try {
             const resultado = await llamarGemini(prompt);
-            console.log("[AI] Respondio: Gemini (fallover)");
             return resultado;
         } catch (geminiError) {
-            console.error("[AI] Ambos proveedores fallaron.", { groq: groqError.message, gemini: geminiError.message });
             const err = new Error("AI_PROVIDER_FAILED");
             err.cause = {
                 groq: groqError?.message || groqError,

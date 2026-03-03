@@ -27,39 +27,26 @@ export function generarSessionBase(idUser) {
   const fecha = obtenerFechaMX(); // YYYY-MM-DD
   return `Act_${idUser}_${fecha.replace(/-/g, "_")}`;
 }
+
 export async function obtenerSesionActivaDelDia(idUser) {
   const base = generarSessionBase(idUser);
 
-  // ✅ OPERACIÓN ATÓMICA: Buscar o crear en una sola operación
-  const sesion = await HistorialBot.findOneAndUpdate(
-    {
-      userId: idUser,
-      sessionId: { $regex: `^${base}` }
-    },
-    {
-      $setOnInsert: {
-        userId: idUser,
-        sessionId: base,
-        nombreConversacion: `Chat ${new Date().toLocaleDateString("es-MX")}`,
-        estadoConversacion: "inicio",
-        tareasEstado: [],
-        ultimoAnalisis: null,
-        mensajes: []
-      }
-    },
-    {
-      upsert: true,
-      new: true,
-      sort: { createdAt: 1 },
-      setDefaultsOnInsert: true
-    }
+  // 1. Buscar sesión existente del día
+  const existente = await HistorialBot.findOne({
+    userId: idUser,
+    sessionId: { $regex: `^${base}` }
+  }).select("sessionId").lean();
+
+
+  if (existente) return existente.sessionId;
+
+  const nueva = await HistorialBot.findOneAndUpdate(
+    { userId: idUser, sessionId: base },
+    { $setOnInsert: { userId: idUser, sessionId: base, /* ... */ } },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
   );
 
-  if (sesion) {
-    return sesion.sessionId;
-  }
-
-  return base;
+  return nueva.sessionId;
 }
 export async function generarNuevaSesionDelDia(idUser) {
   const base = generarSessionBase(idUser);

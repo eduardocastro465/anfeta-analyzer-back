@@ -122,6 +122,14 @@ const ReportePendienteSchema = new mongoose.Schema(
 );
 ReportePendienteSchema.index({ userId: 1, fechaReporte: -1 });
 ReportePendienteSchema.index({ actividadId: 1, pendienteId: 1 });
+ReportePendienteSchema.index({ fechaReporte: -1, userId: 1 });
+ReportePendienteSchema.index({ estadoFinal: 1, fechaReporte: -1 });
+ReportePendienteSchema.index({ prioridad: 1, fechaReporte: -1 });
+ReportePendienteSchema.index({ userId: 1, estadoFinal: 1, fechaReporte: -1 });
+ReportePendienteSchema.index({ userId: 1, prioridad: 1, fechaReporte: -1 });
+ReportePendienteSchema.index({ fechaReporte: 1, userId: 1 });
+ReportePendienteSchema.index({ actividadId: 1, fechaReporte: -1 });
+ReportePendienteSchema.index({ proyectoNombre: "text" });
 
 export default mongoose.model(
     "ReportePendiente",

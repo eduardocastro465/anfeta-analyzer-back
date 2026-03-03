@@ -15,7 +15,6 @@ import { detectarCambiosEnRevisiones } from "../Helpers/actividades.helpers.js";
 import { generarHashActividades } from "../Helpers/generarHashActividades.helper.js";
 import { detectarYSincronizarCambios, detectarCambiosSinSincronizar } from "../Helpers/detectarCambiosActividades.helper.js";
 import crypto from 'crypto';
-import NotificationService from "../services/notificationService.js"; //Servicio de notiifaciones
 
 export async function verificarAnalisisDelDia(req, res) {
   try {
@@ -371,6 +370,8 @@ export async function getActividadesConRevisiones(req, res) {
     const username = decoded.username;
     const email = decoded.email;
     const sessionId = await obtenerSesionActivaDelDia(odooUserId);
+
+    console.log("SessionId generado:", sessionId);
 
     const today = new Date().toLocaleDateString('sv-SE', {
       timeZone: 'America/Mexico_City'
@@ -728,7 +729,7 @@ EJEMPLO FORMATO:
 "6 pendientes, ~4h con Nnico.
 prioriza 1 o 2
 Sin pendientes urgentes."
-`.trim(); 
+`.trim();
 
       aiResult = await smartAICall(promptGenerado);
     }
@@ -989,44 +990,71 @@ RESPONDE SOLO EL TITULO
       { upsert: true, new: true }
     );
 
-    const sesionExistente = await HistorialBot.findOne({
-      userId: odooUserId,
-      sessionId: sessionId
-    });
+    // const sesionExistente = await HistorialBot.findOne({
+    //   userId: odooUserId,
+    //   sessionId: sessionId
+    // });
+    // console.log("Sesion encontrada:", sesionExistente?._id, "| Mensajes:", sesionExistente?.mensajes?.length);
 
-    const yaExisteAnalisisInicial = sesionExistente?.mensajes?.some(
-      msg => msg.tipoMensaje === "analisis_inicial"
-    );
+    // const yaExisteAnalisisInicial = sesionExistente?.mensajes?.some(
+    //   msg => msg.tipoMensaje === "analisis_inicial"
+    // );
 
-    if (!yaExisteAnalisisInicial) {
-      await HistorialBot.findOneAndUpdate(
-        {
-          userId: odooUserId,
-          sessionId: sessionId
+    // if (!yaExisteAnalisisInicial) {
+    //   await HistorialBot.findOneAndUpdate(
+    //     {
+    //       userId: odooUserId,
+    //       sessionId: sessionId
+    //     },
+    //     {
+    //       $set: {
+    //         nombreConversacion: nombreConversacionIA,
+    //         tareasEstado: tareasEstadoArray,
+    //         ultimoAnalisis: analisisCompleto,
+    //         estadoConversacion: "mostrando_actividades"
+    //       },
+    //       $push: {
+    //         mensajes: {
+    //           role: "bot",
+    //           contenido: aiResult.text,
+    //           timestamp: new Date(),
+    //           tipoMensaje: "analisis_inicial",
+    //           analisis: analisisCompleto
+    //         }
+    //       }
+    //     },
+    //     {
+    //       upsert: true,
+    //       new: true
+    //     }
+    //   );
+    // }
+
+    await HistorialBot.findOneAndUpdate(
+      {
+        userId: odooUserId,
+        sessionId: sessionId,
+        "mensajes.tipoMensaje": { $ne: "analisis_inicial" }  // solo entra si NO existe ya
+      },
+      {
+        $set: {
+          nombreConversacion: nombreConversacionIA,
+          tareasEstado: tareasEstadoArray,
+          ultimoAnalisis: analisisCompleto,
+          estadoConversacion: "mostrando_actividades"
         },
-        {
-          $set: {
-            nombreConversacion: nombreConversacionIA,
-            tareasEstado: tareasEstadoArray,
-            ultimoAnalisis: analisisCompleto,
-            estadoConversacion: "mostrando_actividades"
-          },
-          $push: {
-            mensajes: {
-              role: "bot",
-              contenido: aiResult.text,
-              timestamp: new Date(),
-              tipoMensaje: "analisis_inicial",
-              analisis: analisisCompleto
-            }
+        $push: {
+          mensajes: {
+            role: "bot",
+            contenido: aiResult.text,
+            timestamp: new Date(),
+            tipoMensaje: "analisis_inicial",
+            analisis: analisisCompleto
           }
-        },
-        {
-          upsert: true,
-          new: true
         }
-      );
-    }
+      },
+      { upsert: true, new: true }
+    );
 
     return res.json({
       success: true,

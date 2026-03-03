@@ -113,7 +113,7 @@ const MensajeSchema = new mongoose.Schema({
         default: Date.now
     },
     analisis: {
-        type: AnalisisCompletoSchema,
+       type: mongoose.Schema.Types.Mixed,
         default: null
     },
     tipoMensaje: {
@@ -147,7 +147,7 @@ const HistorialSchema = new mongoose.Schema(
             $slice: -30
         },
         ultimoAnalisis: {
-            type: AnalisisCompletoSchema,
+            type: mongoose.Schema.Types.Mixed,
             default: null
         },
         estadoAnterior: {

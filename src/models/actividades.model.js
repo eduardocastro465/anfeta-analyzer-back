@@ -202,11 +202,14 @@ const actividadesSchema = new mongoose.Schema(
 );
 
 // 🔥 ÍNDICES COMPLETOS PARA BÚSQUEDAS RÁPIDAS
-actividadesSchema.index({ odooUserId: 1 });
-actividadesSchema.index({ emailUsuario: 1 });
-actividadesSchema.index({ "actividades.actividadId": 1 });
+
+// En actividades.model.js
+actividadesSchema.index({ odooUserId: 1 }); // búsqueda principal
+actividadesSchema.index({ emailUsuario: 1 }); // usado en guardarExplicacionesTarde
+actividadesSchema.index({ "actividades.actividadId": 1 }); // usado en validarYGuardar
+actividadesSchema.index({ "actividades.pendientes.pendienteId": 1 }); // usado en varios
+actividadesSchema.index({ odooUserId: 1, "analisisGuardado.vigente": 1 }); // verificarCambios
 actividadesSchema.index({ "actividades.fecha": 1 });
-actividadesSchema.index({ "actividades.pendientes.pendienteId": 1 });
 actividadesSchema.index({ "actividades.pendientes.revisadoPorVoz": 1 });
 actividadesSchema.index({ "actividades.pendientes.ultimaExplicacionFecha": -1 });
 actividadesSchema.index({ fechaUltimaExplicacion: -1 });
