@@ -14,6 +14,7 @@ import { guardarMensajeHistorial } from "../Helpers/historial.helper.js";
 import { detectarCambiosEnRevisiones } from "../Helpers/actividades.helpers.js";
 import { generarHashActividades } from "../Helpers/generarHashActividades.helper.js";
 import { detectarYSincronizarCambios, detectarCambiosSinSincronizar } from "../Helpers/detectarCambiosActividades.helper.js";
+import { corregirTranscripcion } from "../Helpers/correctorDelTranscriptorAi.js";
 import crypto from 'crypto';
 
 export async function verificarAnalisisDelDia(req, res) {
@@ -3010,6 +3011,7 @@ export async function obtenerOCrearSessionActual(req, res) {
 
 export async function guardarExplicacionesTarde(req, res) {
   try {
+    console.log('📥 Datos recibidos:', req.body);
     const { queHizo, actividadId, pendienteId, sessionId, motivoNoCompletado, soloGuardarMotivo } = sanitizeObject(req.body);
     console.log('📥 Datos recibidos:', { queHizo, actividadId, pendienteId, sessionId });
 
@@ -3062,7 +3064,11 @@ export async function guardarExplicacionesTarde(req, res) {
       console.warn(`⚠️ Usando ${docsParaActualizar.length} docs SIN filtro email (docs legacy)`);
     }
 
-    if (soloGuardarMotivo && motivoNoCompletado) {
+    if (soloGuardarMotivo) {
+      if (!motivoNoCompletado?.trim()) {
+        console.log(`⚠️ soloGuardarMotivo con motivo vacío, ignorando`);
+        return res.json({ success: true, completada: false });
+      }
       const fechaActual = new Date();
       for (const actividadDoc of docsParaActualizar) {
         await ActividadesSchema.findOneAndUpdate(
@@ -3098,7 +3104,7 @@ export async function guardarExplicacionesTarde(req, res) {
       return res.status(400).json({
         success: false,
         requiereMejora: true,
-        preguntaAclaracion: "No escuché bien tu respuesta. ¿Puedes explicar con más detalle qué hiciste?",
+        preguntaAclaracion: "Explicacion insuficiente. ¿Puedes explicar con más detalle qué hiciste?",
         message: "La explicación es demasiado corta.",
       });
     }
@@ -3118,13 +3124,19 @@ export async function guardarExplicacionesTarde(req, res) {
       });
     }
 
+    const queHizoCorregido = await corregirTranscripcion(
+      queHizo,
+      primerPendiente.nombre || "",
+      primerPendiente.descripcion || ""
+    );
+
     // ==================== ANÁLISIS CON IA (UNA SOLA VEZ) ====================
     const prompt = `Eres un analizador experto de reportes laborales. Evalúa si una tarea fue completada basándote ÚNICAMENTE en lo que el usuario describió.
 
 ━━━ CONTEXTO ━━━
 TAREA: "${primerPendiente.nombre}"
 DESCRIPCIÓN: "${primerPendiente.descripcion || 'Sin descripción'}"
-REPORTE: "${queHizo}"
+REPORTE: "${queHizoCorregido}"
 
 ━━━ LÓGICA DE EVALUACIÓN ━━━
 
@@ -3137,6 +3149,17 @@ NO COMPLETADA (false) cuando el usuario:
 → Dice explícitamente que no terminó: "no lo terminé", "no pude", "quedó pendiente"
 → Describe bloqueos activos: esperando aprobación, sin acceso, dependencia sin resolver
 → Indica avance parcial sin entregable: "empecé pero...", "iba a hacer pero..."
+→ Usa expresiones de insuficiencia temporal o de alcance:  // ← AGREGAR ESTO
+   "no alcancé", "no llegué a", "no tuve tiempo", "me faltó tiempo",
+   "perdí mucho tiempo y no", "no me dio tiempo"
+   Estas son declaraciones EXPLÍCITAS de no completado con confianza >= 0.85
+   y NO requieren aclaración.
+
+→ Usa expresiones de incompletitud parcial:
+   "me quedó a medias", "quedó a medias", "no lo terminé del todo",
+   "a medias", "incompleto", "no lo pude concluir"
+   Estas son declaraciones EXPLÍCITAS de no completado con confianza >= 0.85
+   y NO requieren aclaración.
 
 NECESITA ACLARACIÓN (completada: null) cuando:
 → No puedes determinar con certeza si terminó o no (confianza < 0.65)
@@ -3199,6 +3222,31 @@ motivoNoCompletado debe ser una causa REAL y EXPLÍCITA dicha por el usuario.
 "hola me escuchas / ok / gracias"
 → completada: false, confianza: 0.0, calidad: 0, motivoNoCompletado: null
 
+"no alcancé a terminar"
+→ completada: false, confianza: 0.9, motivoNoCompletado: null
+
+"no alcancé a terminar porque perdí mucho tiempo"
+→ completada: false, confianza: 0.95, motivoNoCompletado: "Pérdida de tiempo"
+
+"estuve revisando pero no alcancé a completarlo"
+→ completada: false, confianza: 0.9, motivoNoCompletado: null
+
+"Estuve viendo cómo hacerlo"
+→ completada: null, necesitaAclaracion: true, ...
+
+"actualicé las entradas pero me quedó a medias"
+→ completada: false, necesitaAclaracion: false, confianza: 0.9, motivoNoCompletado: null
+
+"empecé pero quedó a medias"
+→ completada: false, necesitaAclaracion: false, confianza: 0.9, motivoNoCompletado: null
+
+REGLA ANTI-PREGUNTA INNECESARIA:
+Si el usuario usó cualquiera de estas expresiones, devuelve completada: false
+y necesitaAclaracion: false SIN IMPORTAR qué tan vago sea el resto del reporte:
+"no pude", "no lo terminé", "no alcancé", "me quedó a medias", 
+"quedó pendiente", "no lo concluí", "me faltó", "no lo pude terminar"
+Preguntar "¿Pudiste completarlo?" cuando ya dijo que no, es redundante e incorrecto.
+
 IMPORTANTE: Responde ÚNICAMENTE con el JSON. Sin texto previo ni markdown.`;
 
     const aiResult = await smartAICall(prompt);
@@ -3215,8 +3263,8 @@ IMPORTANTE: Responde ÚNICAMENTE con el JSON. Sin texto previo ni markdown.`;
 
     // Intentar parsear
     let validacion = {
-      completada: true,
-      confianza: 0.8,
+      completada: null,
+      confianza: 0.0,
       razon: "Análisis por defecto",
       evidencias: [],
       calidadExplicacion: 70,
@@ -3243,6 +3291,7 @@ IMPORTANTE: Responde ÚNICAMENTE con el JSON. Sin texto previo ni markdown.`;
       validacion.calidadExplicacion < 40;
 
     if (necesitaAclaracion) {
+      console.log("razon: ", validacion.razon)
       return res.status(200).json({
         success: true,
         requiereMejora: true,
@@ -3257,19 +3306,20 @@ IMPORTANTE: Responde ÚNICAMENTE con el JSON. Sin texto previo ni markdown.`;
     }
 
     // 3. Solo si llegó aquí → calcular y guardar
-    const estaTerminada = typeof validacion.completada === 'boolean'
-      ? validacion.completada
-      : true;
+    const estaTerminada =
+      typeof validacion.completada === 'boolean'
+        ? validacion.completada
+        : false;
 
     const esValidadaPorIA = validacion.confianza >= 0.7 && validacion.calidadExplicacion >= 60;
+
 
     // ==================== GUARDAR EN TODOS LOS DOCUMENTOS ====================
     const fechaActual = new Date();
     const resultadosGuardado = [];
 
+
     for (const actividadDoc of docsParaActualizar) {
-      // ✅ FIX: Usar emailUsuario del JWT si el doc no tiene el campo
-      const emailDocumento = actividadDoc.emailUsuario || emailUsuario;
 
       try {
         const actividad = actividadDoc.actividades.find(a => a.actividadId === actividadId);
@@ -3295,7 +3345,7 @@ IMPORTANTE: Responde ÚNICAMENTE con el JSON. Sin texto previo ni markdown.`;
         const updateOperations = {
           $set: {
             "actividades.$[act].pendientes.$[pend].explicacionVoz": {
-              texto: queHizo.trim(),
+              texto: queHizoCorregido.trim(),
               emailUsuario: emailUsuario,
               fechaRegistro: fechaActual,
               validadaPorIA: esValidadaPorIA,
@@ -3310,7 +3360,7 @@ IMPORTANTE: Responde ÚNICAMENTE con el JSON. Sin texto previo ni markdown.`;
                 lenguaje: "es-MX"
               }
             },
-            "actividades.$[act].pendientes.$[pend].queHizo": queHizo.trim(),
+            "actividades.$[act].pendientes.$[pend].queHizo": queHizoCorregido.trim(),
             "actividades.$[act].pendientes.$[pend].terminada": estaTerminada,
             "actividades.$[act].pendientes.$[pend].revisadoPorVoz": true,
             "actividades.$[act].pendientes.$[pend].fechaRevisionVoz": fechaActual,
