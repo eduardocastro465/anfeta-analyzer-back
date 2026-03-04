@@ -33,7 +33,13 @@ export async function detectarCambiosEnRevisiones(odooUserId, actividadesActuale
     const today = new Date().toLocaleDateString('sv-SE', {
       timeZone: 'America/Mexico_City'
     });
-    const actividadesGuardadasHoy = actividadesGuardadas.actividades.filter(a => a.fecha === today);
+    const actividadesGuardadasHoy = actividadesGuardadas.actividades.filter(a => {
+      if (!a.fecha) return false;
+      const fechaGuardada = a.fecha instanceof Date
+        ? a.fecha.toLocaleDateString('sv-SE', { timeZone: 'America/Mexico_City' })
+        : String(a.fecha).slice(0, 10);
+      return fechaGuardada === today;
+    });
 
     if (actividadesGuardadasHoy.length === 0) {
       return {
