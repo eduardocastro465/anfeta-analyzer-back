@@ -1,6 +1,75 @@
 import { smartAICall } from "../libs/aiService.js";
 
-export async function corregirTranscripcion(texto, nombreTarea = "", descripcionTarea = "") {
+
+export async function corregirTranscripcionMañana(texto, nombreTarea = "", descripcionTarea = "") {
+  if (!texto || texto.trim().length < 10) return texto;
+
+  const prompt = `Eres un corrector literal de transcripciones de voz a texto en español mexicano en contexto laboral de software.
+
+Tu objetivo es: Corregir errores de reconocimiento de voz sin alterar el significado original.
+
+━━━ CONTEXTO DE LA TAREA (SOLO REFERENCIA LÉXICA) ━━━
+Nombre: "${nombreTarea}"
+Descripción: "${descripcionTarea || 'Sin descripción'}"
+
+El contexto SOLO puede usarse para corregir términos técnicos mal reconocidos o desambiguar palabras fonéticamente similares.
+NO puede usarse para agregar acciones, completar tareas implícitas, inventar resultados ni anticipar avances futuros.
+
+━━━ TEXTO A CORREGIR (PLAN DE HOY — VOZ A TEXTO) ━━━
+"${texto}"
+
+━━━ REGLAS ESTRICTAS ━━━
+1. El texto es un plan de lo que el usuario VA A HACER hoy — mantén el tiempo futuro o presente intencional
+2. No agregues pasos, subtareas ni acciones que el usuario no mencionó
+3. No cambies expresiones de intención ("voy a", "planeo", "tengo que") por afirmaciones de hecho
+4. Solo corrige: errores fonéticos obvios, muletillas y repeticiones
+5. Si algo es ambiguo, consérvalo ambiguo
+6. Máximo 3 oraciones
+7. Si la corrección cambia el significado, devuelve el texto original
+8. NUNCA completes palabras parciales ni inventes términos que no están en el original
+9. Si una palabra es incomprensible, cópiala tal cual
+
+CRÍTICO: Responde ÚNICAMENTE con el texto corregido.
+- Sin comillas al inicio o al final
+- Sin paréntesis explicativos
+- Sin notas ni comentarios
+- Sin markdown
+
+CRÍTICO: NUNCA alteres expresiones de incertidumbre, duda o limitación en el plan.
+Ejemplos que NO debes cambiar:
+→ "no sé si voy a poder terminarlo" → NO cambiar
+→ "depende de si llega la respuesta" → NO cambiar
+→ "tal vez lo reviso si me da tiempo" → NO cambiar
+→ "voy a intentar avanzar" → NO cambiar
+
+PRIORIDAD MÁXIMA: Ante la duda, copia la frase original sin modificar.`;
+
+  try {
+    const result = await smartAICall(prompt);
+    let corregido = result.text
+      .trim()
+      .replace(/^["']|["']$/g, "")
+      .split("\n")[0]
+      .trim();
+
+    if (!corregido) return texto;
+    if (corregido.length < texto.length * 0.2) return texto;
+    if (corregido.length > texto.length * 1.5) return texto;
+
+    console.log("🔧 Transcripción mañana corregida:", {
+      original: texto,
+      corregido,
+      reduccion: `${Math.round((1 - corregido.length / texto.length) * 100)}%`,
+    });
+
+    return corregido;
+  } catch (err) {
+    console.warn("⚠️ Error en corregirTranscripcionMañana, usando original:", err.message);
+    return texto;
+  }
+}
+
+export async function corregirTranscripcionTarde(texto, nombreTarea = "", descripcionTarea = "") {
   if (!texto || texto.trim().length < 10) return texto;
 
   const prompt = `Eres un corrector literal de transcripciones de voz a texto en español mexicano en contexto laboral de software.
@@ -27,7 +96,7 @@ NO puede usarse para agregar acciones, completar tareas implícitas, inventar re
 6. Si algo es ambiguo, consérvalo ambiguo
 7. Máximo 3 oraciones
 8. Si la corrección cambia el significado, devuelve el texto original
-9. NUNCA completes palabras parciales ni inventes términos que no están en el original.
+9. NUNCA completes palabras parciales ni inventes términos que   no están en el original.
 10. Si una palabra es incomprensible, cópiala tal cual.
 
 CRÍTICO: Responde ÚNICAMENTE con el texto corregido.
@@ -85,6 +154,125 @@ Es preferible conservar un error de transcripción que alterar el significado.
     return corregido;
   } catch (err) {
     console.warn('⚠️ Error en corregirTranscripcion, usando original:', err.message);
+    return texto;
+  }
+}
+
+export async function corregirTranscripcionProyecto(texto, actividadesResumidas = []) {
+  if (!texto || texto.trim().length < 10) return texto;
+
+  const contextoActividades = actividadesResumidas.length > 0
+    ? `Actividades del usuario (SOLO para desambiguar términos técnicos):
+${actividadesResumidas.map(a => `- ${a.actividad} (${a.estado})`).join("\n")}`
+    : "Sin actividades registradas.";
+
+  const prompt = `Eres un corrector literal de transcripciones de voz a texto en español mexicano en contexto laboral de software.
+
+Tu objetivo es: Corregir errores de reconocimiento de voz sin alterar el significado original.
+
+━━━ CONTEXTO DE PROYECTOS (SOLO REFERENCIA LÉXICA) ━━━
+${contextoActividades}
+
+El contexto SOLO puede usarse para corregir nombres de proyectos/actividades mal reconocidos fonéticamente.
+NO puede usarse para agregar acciones, inferir estados ni inventar avances.
+
+━━━ TEXTO A CORREGIR (MENSAJE SOBRE PROYECTO — VOZ A TEXTO) ━━━
+"${texto}"
+
+━━━ REGLAS ESTRICTAS ━━━
+1. Mantén exactamente el mismo tiempo verbal que usó el usuario
+2. No agregues información que el usuario no mencionó
+3. No cambies el nivel de avance ni el estado de ninguna actividad
+4. Solo corrige: errores fonéticos obvios, muletillas y repeticiones
+5. Si algo es ambiguo, consérvalo ambiguo
+6. Máximo 3 oraciones
+7. Si la corrección cambia el significado, devuelve el texto original
+8. NUNCA completes palabras parciales ni inventes términos que no están en el original
+9. Si una palabra es incomprensible, cópiala tal cual
+
+CRÍTICO: Responde ÚNICAMENTE con el texto corregido.
+- Sin comillas al inicio o al final
+- Sin paréntesis explicativos
+- Sin notas ni comentarios
+- Sin markdown
+
+PRIORIDAD MÁXIMA: Ante la duda, copia la frase original sin modificar.`;
+
+  try {
+    const result = await smartAICall(prompt);
+    let corregido = result.text
+      .trim()
+      .replace(/^["']|["']$/g, "")
+      .split("\n")[0]
+      .trim();
+
+    if (!corregido) return texto;
+    if (corregido.length < texto.length * 0.2) return texto;
+    if (corregido.length > texto.length * 1.5) return texto;
+
+    console.log("🔧 Transcripción proyecto corregida:", {
+      original: texto,
+      corregido,
+      reduccion: `${Math.round((1 - corregido.length / texto.length) * 100)}%`,
+    });
+
+    return corregido;
+  } catch (err) {
+    console.warn("⚠️ Error en corregirTranscripcionProyecto, usando original:", err.message);
+    return texto;
+  }
+}
+
+export async function corregirTranscripcionGeneral(texto) {
+  if (!texto || texto.trim().length < 10) return texto;
+
+  const prompt = `Eres un corrector literal de transcripciones de voz a texto en español mexicano en contexto conversacional general.
+
+Tu objetivo es: Corregir errores de reconocimiento de voz sin alterar el significado original.
+
+━━━ TEXTO A CORREGIR (MENSAJE GENERAL — VOZ A TEXTO) ━━━
+"${texto}"
+
+━━━ REGLAS ESTRICTAS ━━━
+1. Mantén exactamente el mismo tiempo verbal y tono que usó el usuario
+2. No agregues información que el usuario no mencionó
+3. No cambies preguntas por afirmaciones ni viceversa
+4. Solo corrige: errores fonéticos obvios, muletillas y repeticiones
+5. Si algo es ambiguo, consérvalo ambiguo
+6. Máximo 3 oraciones
+7. Si la corrección cambia el significado, devuelve el texto original
+8. NUNCA completes palabras parciales ni inventes términos que no están en el original
+9. Si una palabra es incomprensible, cópiala tal cual
+
+CRÍTICO: Responde ÚNICAMENTE con el texto corregido.
+- Sin comillas al inicio o al final
+- Sin paréntesis explicativos
+- Sin notas ni comentarios
+- Sin markdown
+
+PRIORIDAD MÁXIMA: Ante la duda, copia la frase original sin modificar.`;
+
+  try {
+    const result = await smartAICall(prompt);
+    let corregido = result.text
+      .trim()
+      .replace(/^["']|["']$/g, "")
+      .split("\n")[0]
+      .trim();
+
+    if (!corregido) return texto;
+    if (corregido.length < texto.length * 0.2) return texto;
+    if (corregido.length > texto.length * 1.5) return texto;
+
+    console.log("🔧 Transcripción general corregida:", {
+      original: texto,
+      corregido,
+      reduccion: `${Math.round((1 - corregido.length / texto.length) * 100)}%`,
+    });
+
+    return corregido;
+  } catch (err) {
+    console.warn("⚠️ Error en corregirTranscripcionGeneral, usando original:", err.message);
     return texto;
   }
 }

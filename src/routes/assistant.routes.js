@@ -21,7 +21,7 @@ import {
   obtenerHistorialSidebar,
   guardarExplicaciones,
   validarExplicacion,
-  validarYGuardarExplicacion,
+  validarYGuardarReporteMañana,
   obtenerActividadesConTiempoHoy,
   obtenerTodasExplicacionesAdmin,
   modificarMotivoNoCompletado,
@@ -44,7 +44,7 @@ router.get('/admin/todas-explicaciones', obtenerTodasExplicacionesAdmin);
 router.get('/actividades/hoy/con-tiempo', obtenerActividadesConTiempoHoy);
 router.put('/actividades/pendientes/actualizar', actualizarEstadoPendientes);
 router.post('/validar-explicacion', validarExplicacion);
-router.post('/validar-guardar-explicacion', validarYGuardarExplicacion);
+router.post('/validar-guardar-explicacion', validarYGuardarReporteMañana);
 router.post('/guardar-explicaciones', guardarExplicaciones);
 router.post('/actividades-con-revisiones', getActividadesConRevisiones);
 router.post('/confirmarEstadoPendientes', confirmarEstadoPendientes);

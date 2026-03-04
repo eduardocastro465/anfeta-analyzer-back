@@ -14,7 +14,7 @@ import { guardarMensajeHistorial } from "../Helpers/historial.helper.js";
 import { detectarCambiosEnRevisiones } from "../Helpers/actividades.helpers.js";
 import { generarHashActividades } from "../Helpers/generarHashActividades.helper.js";
 import { detectarYSincronizarCambios, detectarCambiosSinSincronizar } from "../Helpers/detectarCambiosActividades.helper.js";
-import { corregirTranscripcion } from "../Helpers/correctorDelTranscriptorAi.js";
+import { corregirTranscripcionTarde, corregirTranscripcionMañana, corregirTranscripcionProyecto, corregirTranscripcionGeneral } from "../Helpers/correctorDelTranscriptorAi.js";
 import crypto from 'crypto';
 
 export async function verificarAnalisisDelDia(req, res) {
@@ -264,7 +264,7 @@ async function obtenerRevisionesPorFecha(date, email) {
   try {
     const response = await axios.get(
       `${API_URL_ANFETA}/reportes/revisiones-por-fecha`,
-      { params: { date, colaborador: email } }
+      { params: { date, assignee: email } }
     );
     return response.data?.success ? response.data.data : { colaboradores: [] };
   } catch (error) {
@@ -521,7 +521,9 @@ export async function getActividadesConRevisiones(req, res) {
       if (actividadConRevisiones?.pendientes && actividadConRevisiones.pendientes.length > 0) {
         actividadConRevisiones.pendientes.forEach(p => {
           // Solo nos interesan los pendientes asignados al usuario actual
-          const estaAsignado = p.assignees?.some(a => a.name === email);
+          const estaAsignado = p.assignees?.some(
+            a => a.name === email || a.id === odooUserId
+          );
           if (!estaAsignado) return;
 
           // Validar fecha de creación del pendiente (no mayor a hoy)
@@ -991,59 +993,26 @@ RESPONDE SOLO EL TITULO
       { upsert: true, new: true }
     );
 
-    // const sesionExistente = await HistorialBot.findOne({
-    //   userId: odooUserId,
-    //   sessionId: sessionId
-    // });
-    // console.log("Sesion encontrada:", sesionExistente?._id, "| Mensajes:", sesionExistente?.mensajes?.length);
-
-    // const yaExisteAnalisisInicial = sesionExistente?.mensajes?.some(
-    //   msg => msg.tipoMensaje === "analisis_inicial"
-    // );
-
-    // if (!yaExisteAnalisisInicial) {
-    //   await HistorialBot.findOneAndUpdate(
-    //     {
-    //       userId: odooUserId,
-    //       sessionId: sessionId
-    //     },
-    //     {
-    //       $set: {
-    //         nombreConversacion: nombreConversacionIA,
-    //         tareasEstado: tareasEstadoArray,
-    //         ultimoAnalisis: analisisCompleto,
-    //         estadoConversacion: "mostrando_actividades"
-    //       },
-    //       $push: {
-    //         mensajes: {
-    //           role: "bot",
-    //           contenido: aiResult.text,
-    //           timestamp: new Date(),
-    //           tipoMensaje: "analisis_inicial",
-    //           analisis: analisisCompleto
-    //         }
-    //       }
-    //     },
-    //     {
-    //       upsert: true,
-    //       new: true
-    //     }
-    //   );
-    // }
-
     await HistorialBot.findOneAndUpdate(
-      {
-        userId: odooUserId,
-        sessionId: sessionId,
-        "mensajes.tipoMensaje": { $ne: "analisis_inicial" }  // solo entra si NO existe ya
-      },
+      { userId: odooUserId, sessionId },
       {
         $set: {
           nombreConversacion: nombreConversacionIA,
           tareasEstado: tareasEstadoArray,
           ultimoAnalisis: analisisCompleto,
           estadoConversacion: "mostrando_actividades"
-        },
+        }
+      },
+      { upsert: true, new: true }
+    );
+
+    await HistorialBot.findOneAndUpdate(
+      {
+        userId: odooUserId,
+        sessionId,
+        mensajes: { $not: { $elemMatch: { tipoMensaje: "analisis_inicial" } } }
+      },
+      {
         $push: {
           mensajes: {
             role: "bot",
@@ -1053,10 +1022,8 @@ RESPONDE SOLO EL TITULO
             analisis: analisisCompleto
           }
         }
-      },
-      { upsert: true, new: true }
+      }
     );
-
     return res.json({
       success: true,
       answer: aiResult.text,
@@ -1719,7 +1686,7 @@ RESPONDE ÚNICAMENTE EN JSON CON ESTE FORMATO EXACTO:
   }
 }
 
-export async function validarYGuardarExplicacion(req, res) {
+export async function validarYGuardarReporteMañana(req, res) {
   try {
     const {
       actividadId,
@@ -1728,7 +1695,6 @@ export async function validarYGuardarExplicacion(req, res) {
       nombrePendiente,
       explicacion,
       duracionMin,
-      userId,
       sessionId,
       priority,
       duration
@@ -1756,6 +1722,17 @@ export async function validarYGuardarExplicacion(req, res) {
     const odooUserId = decoded.id;
     const odooUserEmail = decoded.email;
 
+    const explicacionCorregida = await corregirTranscripcionMañana(
+      explicacion,
+      nombrePendiente,
+      actividadTitulo
+    );
+
+    console.log("🎙️ Transcripción lista:", {
+      original: explicacion,
+      corregida: explicacionCorregida,
+    });
+
     // ─── 1. VALIDAR CON IA ────────────────────────────────────────────────────
     const promptValidacion = `
 Eres un sistema de validación estricto.
@@ -1764,7 +1741,7 @@ Tu tarea es determinar si una explicación corresponde de forma directa, especí
 
 CONTEXTO: El usuario está explicando qué hará durante el pendiente. ACTIVIDAD: "${actividadTitulo}" 
 PENDIENTE: "${nombrePendiente}" 
-EXPLICACIÓN: "${explicacion}" 
+EXPLICACIÓN: "${explicacionCorregida}" 
 TIEMPO: ${duracionMin || duration || "No especificado"}
 
 Criterios obligatorios:
@@ -1847,7 +1824,7 @@ Eres un asistente que genera resúmenes ejecutivos breves de reportes de trabajo
 
 TAREA: "${nombrePendiente}"
 ACTIVIDAD: "${actividadTitulo}"
-REPORTE DEL USUARIO (voz a texto, puede tener errores de transcripción): "${explicacion}"
+REPORTE DEL USUARIO (voz a texto, puede tener errores de transcripción): "${explicacionCorregida}"
 
 Genera un resumen claro y profesional de lo que el usuario hizo o planea hacer.
 
@@ -1877,7 +1854,7 @@ Responde SOLO con el texto del resumen, sin JSON ni marcadores.
     const fechaActual = new Date();
 
     const datosExplicacion = {
-      texto: explicacion,
+      texto: explicacionCorregida,
       resumen: resumenExplicacion,          // ← resumen agregado
       emailUsuario: emailUsuario,
       fechaRegistro: fechaActual,
@@ -1902,7 +1879,7 @@ Responde SOLO con el texto del resumen, sin JSON ni marcadores.
       },
       {
         $set: {
-          "actividades.$[act].pendientes.$[pend].descripcion": `${explicacion} (por ${emailUsuario})`,
+          "actividades.$[act].pendientes.$[pend].descripcion": `${explicacionCorregida} (por ${emailUsuario})`,
           "actividades.$[act].pendientes.$[pend].explicacionVoz": datosExplicacion,
 
           // Metadatos de actividad
@@ -1928,7 +1905,7 @@ Responde SOLO con el texto del resumen, sin JSON ni marcadores.
         },
         $push: {
           "actividades.$[act].pendientes.$[pend].historialExplicaciones": {
-            texto: explicacion,
+            texto: explicacionCorregida,
             resumen: resumenExplicacion,    // ← resumen también en el historial
             emailUsuario,
             fecha: fechaActual,
@@ -1981,9 +1958,9 @@ Responde SOLO con el texto del resumen, sin JSON ni marcadores.
       },
       {
         $set: {
-          "actividades.$[act].pendientes.$[pend].descripcion": `${explicacion} (por ${emailUsuario})`,
+          "actividades.$[act].pendientes.$[pend].descripcion": `${explicacionCorregida} (por ${emailUsuario})`,
           "actividades.$[act].pendientes.$[pend].explicacionVoz": datosExplicacion,
-          "actividades.$[act].pendientes.$[pend].queHizo": explicacion,
+          "actividades.$[act].pendientes.$[pend].queHizo": explicacionCorregida,
           "actividades.$[act].pendientes.$[pend].revisadoPorVoz": true,
           "actividades.$[act].pendientes.$[pend].fechaRevisionVoz": fechaActual,
           "actividades.$[act].pendientes.$[pend].ultimaActualizacion": fechaActual,
@@ -1999,7 +1976,7 @@ Responde SOLO con el texto del resumen, sin JSON ni marcadores.
         },
         $push: {
           "actividades.$[act].pendientes.$[pend].historialExplicaciones": {
-            texto: explicacion,
+            texto: explicacionCorregida,
             resumen: resumenExplicacion,    // ← resumen en historial de otros usuarios también
             emailUsuario,
             fecha: fechaActual,
@@ -2068,7 +2045,7 @@ Responde SOLO con el texto del resumen, sin JSON ni marcadores.
         actividad: { id: actividadId, titulo: actividadTitulo },
         pendiente: { id: idPendiente, nombre: nombrePendiente },
         explicacion: {
-          texto: explicacion,
+          texto: explicacionCorregida,
           resumen: resumenExplicacion,      // ← expuesto en la respuesta al cliente
           duracion: duracionMin || duration,
           prioridad: priority
@@ -2080,7 +2057,7 @@ Responde SOLO con el texto del resumen, sin JSON ni marcadores.
         sessionId,
         totalExplicacionesGuardadas: pendienteGuardado?.historialExplicaciones?.length || 1,
         fechaProcesamiento: new Date().toISOString(),
-        analisisInvalidado: resultado.analisisGuardado?.vigente === false,
+        analisisInvalidado: resultado?.analisisGuardado?.vigente === false,
         resumenGenerado: resumenExplicacion !== null  // ← indica si se generó o no
       }
     });
@@ -2596,19 +2573,21 @@ export async function consultarIA(req, res) {
       finalSessionId = await obtenerSesionActivaDelDia(userId);
     }
 
+    const mensajeCorregido = await corregirTranscripcionGeneral(mensaje);
+
 
     await guardarMensajeHistorial({
       userId,
       sessionId: finalSessionId,
       role: "usuario",
-      contenido: mensaje,
+      contenido: mensajeCorregido,
       tipoMensaje: "texto",
       estadoConversacion: "esperando_bot"
     });
 
 
 
-    const contextoMemoria = await memoriaService.generarContextoIA(userId, mensaje);
+    const contextoMemoria = await memoriaService.generarContextoIA(userId, mensajeCorregido);
 
     const historial = await HistorialBot.findOne(
       { userId, sessionId: finalSessionId },
@@ -2631,7 +2610,7 @@ export async function consultarIA(req, res) {
   ${contextoConversacion ? `CONVERSACIÓN RECIENTE:\n${contextoConversacion}\n` : ''}
 
   MENSAJE ACTUAL DEL USUARIO:
-  "${mensaje}"
+  "${mensajeCorregido}"
 
   INSTRUCCIONES:
 1. Si dice solo "hola" → responde con saludo simple: "¡Hola! ¿En qué puedo ayudarte?"
@@ -2743,14 +2722,9 @@ export async function consultarIAProyecto(req, res) {
       finalSessionId = await obtenerSesionActivaDelDia(userId);
     }
 
-    await guardarMensajeHistorial({
-      userId,
-      sessionId: finalSessionId,
-      role: "usuario",
-      contenido: mensaje,
-      tipoMensaje: "texto",
-      estadoConversacion: "esperando_bot"
-    });
+
+
+
 
     const contextoMemoria = await memoriaService.generarContextoIA(userId, mensaje);
 
@@ -2783,6 +2757,17 @@ export async function consultarIAProyecto(req, res) {
       )
       .join("\n") || "";
 
+    const mensajeCorregido = await corregirTranscripcionProyecto(mensaje, actividadesResumidas);
+
+    await guardarMensajeHistorial({
+      userId,
+      sessionId: finalSessionId,
+      role: "usuario",
+      contenido: mensajeCorregido,
+      tipoMensaje: "texto",
+      estadoConversacion: "esperando_bot"
+    });
+
     const prompt = `Eres un asistente personal inteligente. Tu trabajo es responder de forma natural, útil y relevante.
 
   CONTEXTO DEL USUARIO:
@@ -2793,7 +2778,7 @@ export async function consultarIAProyecto(req, res) {
   ${tieneActividades ? `ACTIVIDADES Y PENDIENTES DEL USUARIO:\n${JSON.stringify(actividadesResumidas, null, 2)}\n` : 'El usuario no tiene actividades registradas.\n'}
 
   MENSAJE ACTUAL DEL USUARIO:
-  "${mensaje}"
+  "${mensajeCorregido}"
 
   INSTRUCCIONES:
   1. Lee cuidadosamente el mensaje del usuario
@@ -3124,7 +3109,7 @@ export async function guardarExplicacionesTarde(req, res) {
       });
     }
 
-    const queHizoCorregido = await corregirTranscripcion(
+    const queHizoCorregido = await corregirTranscripcionTarde(
       queHizo,
       primerPendiente.nombre || "",
       primerPendiente.descripcion || ""
