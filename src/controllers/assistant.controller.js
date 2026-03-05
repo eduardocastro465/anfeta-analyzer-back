@@ -18,8 +18,6 @@ import { detectarYSincronizarCambios, detectarCambiosSinSincronizar } from "../H
 import { corregirTranscripcionTarde, corregirTranscripcionMañana, corregirTranscripcionProyecto, corregirTranscripcionGeneral } from "../Helpers/correctorDelTranscriptorAi.js";
 import { sincronizarExplicacionesCompaneros } from "../Helpers/sincronizarExplicacionesCompaneros.helper.js";
 
-
-
 export async function verificarAnalisisDelDia(req, res) {
   try {
     const { token } = req.cookies;
@@ -208,7 +206,6 @@ export async function verificarCambiosTareas(req, res) {
     });
   }
 }
-
 
 /* ======================================================
    FUNCIONES AUXILIARES - LIMPIEZA Y FORMATEO
