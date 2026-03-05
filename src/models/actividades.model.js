@@ -179,6 +179,11 @@ const actividadesSchema = new mongoose.Schema(
     preferencias: {
       velocidadVoz: { type: Number, default: 1.0, min: 0.5, max: 2.0 },
       idiomaVoz: { type: String, default: "es-MX" },
+      modoAsistenteIA: {
+        type: String,
+        enum: ['proyecto', 'general'],
+        default: "proyecto",
+      },
       notificaciones: {
         email: { type: Boolean, default: false },
         push: { type: Boolean, default: true }

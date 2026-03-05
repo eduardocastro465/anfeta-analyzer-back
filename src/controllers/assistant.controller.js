@@ -1,4 +1,5 @@
 import axios from 'axios';
+import crypto from 'crypto';
 import { getAllUsers } from './users.controller.js';
 import jwt from 'jsonwebtoken';
 import { isGeminiQuotaError } from '../libs/geminiRetry.js'
@@ -15,7 +16,9 @@ import { detectarCambiosEnRevisiones } from "../Helpers/actividades.helpers.js";
 import { generarHashActividades } from "../Helpers/generarHashActividades.helper.js";
 import { detectarYSincronizarCambios, detectarCambiosSinSincronizar } from "../Helpers/detectarCambiosActividades.helper.js";
 import { corregirTranscripcionTarde, corregirTranscripcionMañana, corregirTranscripcionProyecto, corregirTranscripcionGeneral } from "../Helpers/correctorDelTranscriptorAi.js";
-import crypto from 'crypto';
+import { sincronizarExplicacionesCompaneros } from "../Helpers/sincronizarExplicacionesCompaneros.helper.js";
+
+
 
 export async function verificarAnalisisDelDia(req, res) {
   try {
@@ -414,12 +417,12 @@ export async function getActividadesConRevisiones(req, res) {
     ------------------------------------------------------------------ */
 
     const HORARIO_INICIO_LABORAL = 9.0;  // 9:00 AM
-    const HORARIO_FIN_LABORAL = 18.0;    // 6:00 PM
+    const HORARIO_FIN_LABORAL = 17.0;    // 5:00 PM
 
     let actividadesFiltradas = actividadesRaw.filter(act => {
       const tituloLower = act.titulo?.toLowerCase() || '';
       const horaInicio = convertirHoraADecimal(act.horaInicio);
-      const horaFin = convertirHoraADecimal(act.horaFin);
+      // const horaFin = convertirHoraADecimal(act.horaFin);
 
       // 1. Excluir FTF (cualquier variante)
       if (tituloLower.includes('ftf')) return false;
@@ -429,7 +432,7 @@ export async function getActividadesConRevisiones(req, res) {
 
       // 3. Excluir actividades fuera de horario laboral (9am - 6pm)
       if (horaInicio < HORARIO_INICIO_LABORAL) return false;
-      if (horaFin > HORARIO_FIN_LABORAL) return false;
+      if (horaInicio >= HORARIO_FIN_LABORAL) return false;
 
       return true;
     });
@@ -521,9 +524,12 @@ export async function getActividadesConRevisiones(req, res) {
       if (actividadConRevisiones?.pendientes && actividadConRevisiones.pendientes.length > 0) {
         actividadConRevisiones.pendientes.forEach(p => {
           // Solo nos interesan los pendientes asignados al usuario actual
-          const estaAsignado = p.assignees?.some(
-            a => a.name === email || a.id === odooUserId
-          );
+          const estaAsignado = !p.assignees ||
+            p.assignees.length === 0 ||
+            p.assignees.some(a =>
+              (a.name && a.name === email) ||
+              (a.id && a.id === odooUserId)
+            );
           if (!estaAsignado) return;
 
           // Validar fecha de creación del pendiente (no mayor a hoy)
@@ -991,6 +997,11 @@ RESPONDE SOLO EL TITULO
         }
       },
       { upsert: true, new: true }
+    );
+
+    await sincronizarExplicacionesCompaneros(
+      odooUserId,
+      actividadesParaGuardar.map(a => a.actividadId)
     );
 
     await HistorialBot.findOneAndUpdate(
@@ -3126,9 +3137,19 @@ REPORTE: "${queHizoCorregido}"
 ━━━ LÓGICA DE EVALUACIÓN ━━━
 
 COMPLETADA (true) cuando el usuario:
-→ Usa verbos en pasado que indican finalización: terminé, completé, implementé, corregí, creé, subí, envié
-→ Menciona resultados verificables: "funciona", "está listo", "ya en producción", "lo probé y..."
-→ Describe entregables concretos aunque use lenguaje informal o coloquial
+- → Usa verbos en pasado que indican finalización: terminé, completé, implementé, corregí, creé, subí, envié
+- → Menciona resultados verificables: "funciona", "está listo", "ya en producción", "lo probé y..."
+- → Describe entregables concretos aunque use lenguaje informal o coloquial
++ → Usa verbos en pasado (1ª persona singular O plural) que indican trabajo realizado:
++   terminé/terminamos, completé/completamos, implementé/implementamos,
++   hice/hicimos, configuré/configuramos, habilité/habilitamos, conecté/conectamos,
++   subí/subimos, envié/enviamos, creé/creamos, corregí/corregimos, probé/probamos,
++   usé/usamos, ocupé/ocupamos, integré/integramos, activé/activamos
++ → Describe el trabajo realizado aunque use lenguaje informal o coloquial: "lo que hicimos fue...",
++   "básicamente habilitamos...", "lo que se hizo fue...", "ocupamos X para Y"
++ → Menciona resultados verificables: "funciona", "está listo", "ya en producción", "lo probé y..."
++ → REGLA CLAVE: Si el usuario describe QUÉ hizo usando verbos en pasado sin indicar que no terminó,
++   asumir completada: true. La ausencia de "terminé" no implica incompleto.
 
 NO COMPLETADA (false) cuando el usuario:
 → Dice explícitamente que no terminó: "no lo terminé", "no pude", "quedó pendiente"
@@ -3224,6 +3245,12 @@ motivoNoCompletado debe ser una causa REAL y EXPLÍCITA dicha por el usuario.
 
 "empecé pero quedó a medias"
 → completada: false, necesitaAclaracion: false, confianza: 0.9, motivoNoCompletado: null
+
+"aquí básicamente lo que hicimos fue habilitar la conexión mediante web socket para comunicación en tiempo real"
+→ completada: true, confianza: 0.85, calidad: 60
+
+"lo que hicimos fue configurar X para que funcione con Y"
+→ completada: true, confianza: 0.85
 
 REGLA ANTI-PREGUNTA INNECESARIA:
 Si el usuario usó cualquiera de estas expresiones, devuelve completada: false
@@ -4016,6 +4043,13 @@ export async function getActividadesDesdeDB(req, res) {
       });
     }
 
+    console.log("Sincronizando cambios de explicaciones de compañeros");
+
+    await sincronizarExplicacionesCompaneros(
+      odooUserId,
+      actividadesDeHoy.map(a => a.actividadId)
+    );
+
     /* ------------------------------------------------------------------
        PASO 4: APLICAR FILTROS (FTF, 00sec, horario laboral)
     ------------------------------------------------------------------ */
@@ -4267,6 +4301,51 @@ Sin pendientes urgentes."
         };
       })
     };
+
+    const analisisCompleto = {
+      success: true,
+      answer: aiResult.text,
+      provider: aiResult.provider,
+      sessionId,
+      proyectoPrincipal,
+      colaboradoresInvolucrados: colaboradoresTotales,
+      metrics: {
+        totalActividadesProgramadas: actividadesFiltradas.length,
+        actividadesConPendientes: actividadesFinales.length,
+        tareasConTiempo: totalTareasConTiempo,
+        tareasSinTiempo: totalTareasSinTiempo,
+        tareasAltaPrioridad,
+        tiempoEstimadoTotal: `${horasTotales}h ${minutosTotales}m`,
+        totalColaboradores: colaboradoresTotales.length
+      },
+      data: respuestaData,
+      multiActividad: true,
+    };
+
+    await HistorialBot.findOneAndUpdate(
+      { userId: odooUserId, sessionId },
+      { $set: { ultimoAnalisis: analisisCompleto } },
+      { upsert: true }
+    );
+
+    await HistorialBot.findOneAndUpdate(
+      {
+        userId: odooUserId,
+        sessionId,
+        mensajes: { $not: { $elemMatch: { tipoMensaje: "analisis_inicial" } } }
+      },
+      {
+        $push: {
+          mensajes: {
+            role: "bot",
+            contenido: aiResult.text,
+            timestamp: new Date(),
+            tipoMensaje: "analisis_inicial",
+            analisis: analisisCompleto
+          }
+        }
+      }
+    );
 
     return res.json({
       success: true,
