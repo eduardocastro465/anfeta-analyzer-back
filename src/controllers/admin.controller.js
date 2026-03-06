@@ -39,11 +39,19 @@ export async function obtenerTodasExplicacionesAdmin(req, res) {
           if (actividad.pendientes && Array.isArray(actividad.pendientes)) {
             actividad.pendientes.forEach((pendiente) => {
               
-              // Explicacion actual
+              // DATOS IMPORTANTES:
+              // - descripcion: lo que se hará en el día (mañana/planeación)
+              // - queHizo: lo que se hizo en la tarde (ejecución/realizado)
+              
+              // Explicacion actual (queHizo - lo que se hizo en la tarde)
               if (pendiente.explicacionVoz && pendiente.explicacionVoz.texto) {
                 usuarioData.explicaciones.push({
                   id: pendiente.pendienteId,
                   pendiente: pendiente.nombre,
+                  // Lo que se hará (mañana/planeación)
+                  descripcion: pendiente.descripcion || '',
+                  // Lo que se hizo (tarde/ejecución)
+                  queHizo: pendiente.queHizo || pendiente.explicacionVoz.texto,
                   actividad: actividad.titulo,
                   proyecto: actividad.tituloProyecto || 'Sin proyecto',
                   fechaActividad: actividad.fecha || 'Sin fecha',
@@ -61,18 +69,59 @@ export async function obtenerTodasExplicacionesAdmin(req, res) {
                   confirmada: pendiente.confirmada || false,
                   colaboradores: colaboradoresActividad,
                   idsColaboradores: idsColaboradores,
-                  tieneColaboradores: colaboradoresActividad.length > 0
+                  tieneColaboradores: colaboradoresActividad.length > 0,
+                  // Metadatos adicionales
+                  metadata: pendiente.explicacionVoz.metadata || {},
+                  vecesExplicado: pendiente.vecesExplicado || 0,
+                  fechaRevisionVoz: pendiente.fechaRevisionVoz,
+                  revisadoPorVoz: pendiente.revisadoPorVoz || false
                 });
                 totalExplicaciones++;
               }
 
-              // Historial de explicaciones
+              // Si NO tiene explicacionVoz pero SÍ tiene queHizo (tarea realizada sin explicación formal)
+              if (!pendiente.explicacionVoz && pendiente.queHizo && pendiente.queHizo.trim() !== '') {
+                usuarioData.explicaciones.push({
+                  id: pendiente.pendienteId,
+                  pendiente: pendiente.nombre,
+                  // Lo que se hará (mañana/planeación)
+                  descripcion: pendiente.descripcion || '',
+                  // Lo que se hizo (tarde/ejecución)
+                  queHizo: pendiente.queHizo,
+                  actividad: actividad.titulo,
+                  proyecto: actividad.tituloProyecto || 'Sin proyecto',
+                  fechaActividad: actividad.fecha || 'Sin fecha',
+                  horaInicio: actividad.horaInicio || '',
+                  horaFin: actividad.horaFin || '',
+                  status: actividad.status || '',
+                  texto: pendiente.queHizo, // Usar queHizo como texto
+                  fecha: pendiente.fechaFinTerminada || pendiente.ultimaActualizacion,
+                  email: pendiente.actualizadoPor || 'Sistema',
+                  validada: false,
+                  razon: 'Registro automático - sin explicación de voz',
+                  duracion: pendiente.duracionMin || 0,
+                  prioridad: pendiente.prioridad || 'MEDIA',
+                  terminada: pendiente.terminada || false,
+                  confirmada: pendiente.confirmada || false,
+                  colaboradores: colaboradoresActividad,
+                  idsColaboradores: idsColaboradores,
+                  tieneColaboradores: colaboradoresActividad.length > 0,
+                  esRegistroAutomatico: true
+                });
+                totalExplicaciones++;
+              }
+
+              // Historial de explicaciones (versiones anteriores de queHizo)
               if (pendiente.historialExplicaciones && pendiente.historialExplicaciones.length > 0) {
-                pendiente.historialExplicaciones.forEach((historial) => {
+                pendiente.historialExplicaciones.forEach((historial, index) => {
                   if (historial.texto) {
                     usuarioData.explicaciones.push({
-                      id: `${pendiente.pendienteId}-historial`,
+                      id: `${pendiente.pendienteId}-historial-${index}`,
                       pendiente: pendiente.nombre,
+                      // Lo que se hará (mañana/planeación)
+                      descripcion: pendiente.descripcion || '',
+                      // Lo que se hizo (tarde/ejecución) - versión histórica
+                      queHizo: historial.texto,
                       actividad: actividad.titulo,
                       proyecto: actividad.tituloProyecto || 'Sin proyecto',
                       fechaActividad: actividad.fecha || 'Sin fecha',
@@ -80,16 +129,18 @@ export async function obtenerTodasExplicacionesAdmin(req, res) {
                       horaFin: actividad.horaFin || '',
                       status: actividad.status || '',
                       texto: historial.texto,
-                      fecha: historial.fecha,
+                      fecha: historial.fechaRegistro,
                       email: historial.emailUsuario,
                       validada: historial.validadaPorIA || false,
                       razon: historial.razonIA || '',
                       duracion: pendiente.duracionMin || 0,
                       prioridad: pendiente.prioridad || 'MEDIA',
                       esHistorial: true,
+                      version: index + 1,
                       colaboradores: colaboradoresActividad,
                       idsColaboradores: idsColaboradores,
-                      tieneColaboradores: colaboradoresActividad.length > 0
+                      tieneColaboradores: colaboradoresActividad.length > 0,
+                      metadata: historial.metadata || {}
                     });
                     totalExplicaciones++;
                   }
@@ -105,8 +156,9 @@ export async function obtenerTodasExplicacionesAdmin(req, res) {
         usuarioData.totalExplicaciones = usuarioData.explicaciones.length;
         usuarioData.validadas = usuarioData.explicaciones.filter(e => e.validada).length;
         usuarioData.rechazadas = usuarioData.explicaciones.filter(e => !e.validada && e.razon).length;
+        usuarioData.registrosAutomaticos = usuarioData.explicaciones.filter(e => e.esRegistroAutomatico).length;
         
-        // Ordenar por fecha
+        // Ordenar por fecha (más reciente primero)
         usuarioData.explicaciones.sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
       }
 
