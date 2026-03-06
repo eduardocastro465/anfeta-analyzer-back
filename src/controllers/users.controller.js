@@ -34,12 +34,13 @@ export async function guardarPreferenciasUsuario(req, res) {
     const decoded = jwt.verify(token, TOKEN_SECRET);
     const odooUserId = decoded.id;
 
-    const { tema, velocidadVoz, idiomaVoz } = sanitizeObject(req.body);
+    const { tema, velocidadVoz, idiomaVoz, modoAsistenteIA } = sanitizeObject(req.body);
 
     const update = {};
     if (tema !== undefined) update["preferencias.tema"] = tema;
     if (velocidadVoz !== undefined) update["preferencias.velocidadVoz"] = velocidadVoz;
     if (idiomaVoz !== undefined) update["preferencias.idiomaVoz"] = idiomaVoz;
+    if (modoAsistenteIA !== undefined) update["preferencias.modoAsistenteIA"] = modoAsistenteIA;
 
     await ActividadesSchema.findOneAndUpdate(
       { odooUserId },
@@ -69,7 +70,8 @@ export async function obtenerPreferenciasUsuario(req, res) {
       preferencias: doc?.preferencias || {
         tema: "AUTO",
         velocidadVoz: 1,
-        idiomaVoz: "es-MX"
+        idiomaVoz: "es-MX",
+        modoAsistenteIA: "proyecto"
       }
     });
   } catch (error) {
