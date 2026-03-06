@@ -6,16 +6,18 @@ import crypto from 'crypto';
  */
 export function generarHashActividades(actividadesFinales, revisionesPorActividad) {
   const datos = actividadesFinales.map(a => {
-    const conTiempo = (revisionesPorActividad[a.id]?.pendientesConTiempo || [])
-      .map(t => `${t.id}:${t.duracionMin}`);
+    const revision = revisionesPorActividad[a.id];
 
-    const sinTiempo = (revisionesPorActividad[a.id]?.pendientesSinTiempo || [])
-      .map(t => `${t.id}:sin-tiempo`);
+    const conTiempo = (revision?.pendientesConTiempo || [])
+      .map(t => `${t.id}:${t.nombre}:${t.duracionMin}:${(t.colaboradoresEmails || []).filter(Boolean).sort().join('|')}`);
+
+    const sinTiempo = (revision?.pendientesSinTiempo || [])
+      .map(t => `${t.id}:${t.nombre}:sin-tiempo:${(t.colaboradoresEmails || []).filter(Boolean).sort().join('|')}`);
 
     return {
       id: a.id,
-      titulo: a.titulo,
-      horario: `${a.horaInicio}-${a.horaFin}`,
+      titulo: revision?.titulo || a.titulo,
+      horario: `${revision?.horaInicio || a.horaInicio}-${revision?.horaFin || a.horaFin}`,
       tareas: [...conTiempo, ...sinTiempo].sort().join(',')
     };
   });
