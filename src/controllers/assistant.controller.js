@@ -17,6 +17,7 @@ import { generarHashActividades } from "../Helpers/generarHashActividades.helper
 import { detectarYSincronizarCambios, detectarCambiosSinSincronizar } from "../Helpers/detectarCambiosActividades.helper.js";
 import { corregirTranscripcionTarde, corregirTranscripcionMañana, corregirTranscripcionProyecto, corregirTranscripcionGeneral } from "../Helpers/correctorDelTranscriptorAi.js";
 import { sincronizarExplicacionesCompaneros } from "../Helpers/sincronizarExplicacionesCompaneros.helper.js";
+import console from 'console';
 
 export async function verificarAnalisisDelDia(req, res) {
   try {
@@ -344,12 +345,12 @@ function construirMensajeCambios(cambiosDetectados, revisionesPorActividad) {
 
 export async function getActividadesConRevisiones(req, res) {
   try {
+
     const {
       question = "¿Qué actividades y revisiones tengo hoy? ¿Qué me recomiendas priorizar?",
       showAll = false,
       consultarAlApi = false
     } = sanitizeObject(req.body);
-
 
 
     const { token } = req.cookies;
@@ -383,13 +384,12 @@ export async function getActividadesConRevisiones(req, res) {
     const esPrimeraConsultaDelDia = !documentoExistente?.ultimaSincronizacion
       || documentoExistente.ultimaSincronizacion < inicioDiaHoy;
 
-    console.log(`Primera consulta del día`, esPrimeraConsultaDelDia);
-
 
     if (!esPrimeraConsultaDelDia && !consultarAlApi) {
       console.log('Consultando desde la base de datos');
       return getActividadesDesdeDB(req, res);
     }
+    console.log('Consultando desde la API de Anfeta');
 
     /* ------------------------------------------------------------------
        PASO 2: OBTENER ACTIVIDADES DEL DÍA PARA EL COLABORADOR
