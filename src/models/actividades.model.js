@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 
-// 🔥 ESQUEMA PARA METADATOS DE EXPLICACIÓN DE VOZ
+// ESQUEMA PARA METADATOS DE EXPLICACIÓN DE VOZ
 const explicacionVozSchema = new mongoose.Schema(
   {
     texto: String,
@@ -22,7 +22,7 @@ const explicacionVozSchema = new mongoose.Schema(
   { _id: false }
 );
 
-// 🔥 ESQUEMA PARA HISTORIAL DE EXPLICACIONES
+// ESQUEMA PARA HISTORIAL DE EXPLICACIONES
 const historialExplicacionSchema = new mongoose.Schema(
   {
     texto: String,
@@ -41,7 +41,7 @@ const historialExplicacionSchema = new mongoose.Schema(
   { _id: false }
 );
 
-// 🔥 ESQUEMA PARA PENDIENTE (ACTUALIZADO)
+// ESQUEMA PARA PENDIENTE (ACTUALIZADO)
 const pendienteSchema = new mongoose.Schema(
   {
     pendienteId: String,
@@ -58,10 +58,10 @@ const pendienteSchema = new mongoose.Schema(
     notionBlockId: String,
     tieneAdjuntosNotion: { type: Boolean, default: false },
 
-    // 🔥 NUEVOS CAMPOS PARA VOZ
+    // NUEVOS CAMPOS PARA VOZ
     prioridad: { type: String, enum: ['ALTA', 'MEDIA', 'BAJA', 'URGENTE'], default: 'MEDIA' },
 
-    // 🔥 CAMPOS DE AUDITORÍA Y SEGUIMIENTO
+    // CAMPOS DE AUDITORÍA Y SEGUIMIENTO
     ultimaActualizacion: { type: Date, default: Date.now },
     actualizadoPor: String, // Email del usuario que actualizó
     revisadoPorVoz: { type: Boolean, default: false },
@@ -69,18 +69,18 @@ const pendienteSchema = new mongoose.Schema(
     vecesExplicado: { type: Number, default: 0 },
     ultimaExplicacionFecha: Date,
 
-    // 🔥 EXPLICACIÓN DE VOZ ACTUAL
+    // EXPLICACIÓN DE VOZ ACTUAL
     explicacionVoz: explicacionVozSchema,
 
-    // 🔥 HISTORIAL COMPLETO DE EXPLICACIONES
+    // HISTORIAL COMPLETO DE EXPLICACIONES
     historialExplicaciones: [historialExplicacionSchema],
 
-    // 🔥 ESTADÍSTICAS DE USO
+    // ESTADÍSTICAS DE USO
     tiempoTotalExplicacion: { type: Number, default: 0 }, // en segundos
     intentosValidacion: { type: Number, default: 0 },
     intentosExitosos: { type: Number, default: 0 },
 
-    // 🔥 FLAGS ADICIONALES
+    // FLAGS ADICIONALES
     requiereAtencion: { type: Boolean, default: false },
     complejidad: { type: String, enum: ['BAJA', 'MEDIA', 'ALTA'], default: 'MEDIA' },
     tags: [String] // Etiquetas para categorización
@@ -88,7 +88,7 @@ const pendienteSchema = new mongoose.Schema(
   { _id: false }
 );
 
-// 🔥 ESQUEMA PARA ACTIVIDAD (ACTUALIZADO)
+// ESQUEMA PARA ACTIVIDAD (ACTUALIZADO)
 const actividadSchema = new mongoose.Schema(
   {
     actividadId: { type: String, required: true },
@@ -103,30 +103,30 @@ const actividadSchema = new mongoose.Schema(
 
     colaboradoresEmails: [String],
     IdColaboradoresEmails: [String],
-    // 🔥 NUEVOS CAMPOS PARA VOZ
+    // NUEVOS CAMPOS PARA VOZ
     actualizadoPor: String, // Email del usuario que actualizó
     fechaRevisionVoz: Date,
     totalExplicacionesVoz: { type: Number, default: 0 },
     completadaPorVoz: { type: Boolean, default: false },
 
-    // 🔥 METADATOS ADICIONALES
+    // METADATOS ADICIONALES
     contexto: String,
     ubicacion: String,
     herramientas: [String],
 
-    // 🔥 ESTADÍSTICAS
+    // ESTADÍSTICAS
     tiempoTotalEstimado: Number,
     tiempoRealUtilizado: Number,
     eficiencia: Number,
 
-    // 🔥 FLAGS
+    // FLAGS
     requiereFeedback: { type: Boolean, default: false },
     prioridadGlobal: { type: String, enum: ['ALTA', 'MEDIA', 'BAJA'], default: 'MEDIA' }
   },
   { _id: false }
 );
 
-// 🔥 ESQUEMA PRINCIPAL (ACTUALIZADO)
+// ESQUEMA PRINCIPAL (ACTUALIZADO)
 const actividadesSchema = new mongoose.Schema(
   {
     odooUserId: { type: String, required: true },
@@ -143,14 +143,14 @@ const actividadesSchema = new mongoose.Schema(
       fechaGeneracion: Date,
       vigente: { type: Boolean, default: true }
     },
-    // 🔥 METADATOS GLOBALES DE VOZ
+    // METADATOS GLOBALES DE VOZ
     fechaPrimeraExplicacion: Date,
     fechaUltimaExplicacion: Date,
     totalExplicacionesVoz: { type: Number, default: 0 },
     totalExplicacionesValidadas: { type: Number, default: 0 },
     totalExplicacionesRechazadas: { type: Number, default: 0 },
 
-    // 🔥 SESIONES DE VOZ
+    // SESIONES DE VOZ
     sesionesVoz: [{
       sessionId: String,
       fechaInicio: Date,
@@ -162,7 +162,7 @@ const actividadesSchema = new mongoose.Schema(
       estado: { type: String, enum: ['COMPLETADA', 'INTERRUMPIDA', 'ERROR'], default: 'COMPLETADA' }
     }],
 
-    // 🔥 ESTADÍSTICAS GLOBALES
+    // ESTADÍSTICAS GLOBALES
     estadisticas: {
       totalActividades: { type: Number, default: 0 },
       totalPendientes: { type: Number, default: 0 },
@@ -175,7 +175,7 @@ const actividadesSchema = new mongoose.Schema(
       fechaUltimaEstadistica: Date
     },
 
-    // 🔥 AUDITORÍA
+    // AUDITORÍA
     metadata: {
       versionApp: String,
       sistemaOperativo: String,
@@ -190,7 +190,7 @@ const actividadesSchema = new mongoose.Schema(
   }
 );
 
-// 🔥 ÍNDICES COMPLETOS PARA BÚSQUEDAS RÁPIDAS
+// ÍNDICES COMPLETOS PARA BÚSQUEDAS RÁPIDAS
 
 // En actividades.model.js
 actividadesSchema.index({ odooUserId: 1 }); // búsqueda principal
@@ -204,7 +204,7 @@ actividadesSchema.index({ "actividades.pendientes.ultimaExplicacionFecha": -1 })
 actividadesSchema.index({ fechaUltimaExplicacion: -1 });
 actividadesSchema.index({ "sesionesVoz.sessionId": 1 });
 
-// 🔥 MIDDLEWARE PARA ACTUALIZAR ESTADÍSTICAS
+// MIDDLEWARE PARA ACTUALIZAR ESTADÍSTICAS
 actividadesSchema.pre('save', async function (next) {
   const doc = this;
 
@@ -244,7 +244,7 @@ actividadesSchema.pre('save', async function (next) {
 
 });
 
-// 🔥 MÉTODOS DE INSTANCIA ÚTILES
+// MÉTODOS DE INSTANCIA ÚTILES
 actividadesSchema.methods.agregarSesionVoz = function (sesionData) {
   this.sesionesVoz.push(sesionData);
   this.fechaUltimaExplicacion = new Date();
@@ -297,7 +297,7 @@ actividadesSchema.methods.actualizarEstadisticasUsuario = function () {
   return this.save();
 };
 
-// 🔥 MÉTODO PARA OBTENER REPORTE COMPLETO
+// MÉTODO PARA OBTENER REPORTE COMPLETO
 actividadesSchema.statics.generarReporteUsuario = async function (odooUserId, emailUsuario) {
   const usuario = await this.findOne({ odooUserId });
 

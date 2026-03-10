@@ -27,7 +27,7 @@ const EstadoTareaSchema = new mongoose.Schema({
 const TareaPendienteSchema = new mongoose.Schema({
     pendienteId: {
         type: String,
-        default: null   // 👈 NO required
+        default: null   // NO required
     },
     id: {
         type: String,

@@ -5,8 +5,7 @@ const ReportePendienteSchema = new mongoose.Schema(
         reporteId: {
             type: String,
             required: true,
-            unique: true,
-            index: true
+            unique: true
         },
         userId: {
             type: mongoose.Schema.Types.ObjectId,
