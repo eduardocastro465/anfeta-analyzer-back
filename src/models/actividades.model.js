@@ -110,14 +110,14 @@ const actividadSchema = new mongoose.Schema(
     completadaPorVoz: { type: Boolean, default: false },
 
     // 🔥 METADATOS ADICIONALES
-    contexto: String, // Contexto adicional de la actividad
-    ubicacion: String, // Ubicación o entorno
-    herramientas: [String], // Herramientas utilizadas
+    contexto: String,
+    ubicacion: String,
+    herramientas: [String],
 
     // 🔥 ESTADÍSTICAS
-    tiempoTotalEstimado: Number, // en minutos
-    tiempoRealUtilizado: Number, // en minutos
-    eficiencia: Number, // porcentaje
+    tiempoTotalEstimado: Number,
+    tiempoRealUtilizado: Number,
+    eficiencia: Number,
 
     // 🔥 FLAGS
     requiereFeedback: { type: Boolean, default: false },
@@ -173,22 +173,6 @@ const actividadesSchema = new mongoose.Schema(
       eficienciaGlobal: Number, // porcentaje
       ultimaSessionId: String,
       fechaUltimaEstadistica: Date
-    },
-
-    // 🔥 PREFERENCIAS DE USUARIO
-    preferencias: {
-      velocidadVoz: { type: Number, default: 1.0, min: 0.5, max: 2.0 },
-      idiomaVoz: { type: String, default: "es-MX" },
-      modoAsistenteIA: {
-        type: String,
-        enum: ['proyecto', 'general'],
-        default: "proyecto",
-      },
-      notificaciones: {
-        email: { type: Boolean, default: false },
-        push: { type: Boolean, default: true }
-      },
-      tema: { type: String, enum: ['light', 'dark', 'AUTO'], default: 'AUTO' }
     },
 
     // 🔥 AUDITORÍA

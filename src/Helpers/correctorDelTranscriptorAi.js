@@ -92,12 +92,13 @@ NO puede usarse para agregar acciones, completar tareas implícitas, inventar re
 2. No agregues información no dicha explícitamente
 3. No cambies el nivel de avance
 4. No agregues verbos de finalización no dichos
-5. Solo corrige: errores fonéticos obvios, muletillas y repeticiones
+5. Solo corrige errores fonéticos obvios (palabras mal reconocidas que suenan igual), elimina muletillas.
 6. Si algo es ambiguo, consérvalo ambiguo
-7. Máximo 3 oraciones
+7. No reduzcas ni comprimas el texto. 
 8. Si la corrección cambia el significado, devuelve el texto original
 9. NUNCA completes palabras parciales ni inventes términos que   no están en el original.
 10. Si una palabra es incomprensible, cópiala tal cual.
+11. NUNCA comprimas, resumas ni reduzcas el texto más de un 15%. Si el resultado tiene menos del 85% de las palabras del original, devuelve el texto original sin modificar.
 
 CRÍTICO: Responde ÚNICAMENTE con el texto corregido.
 - Si el usuario usó pasado ("hice", "modifiqué", "fui modificando"), mantenlo en pasado.
@@ -128,6 +129,10 @@ Ejemplos de frases que NUNCA debes alterar:
 REGLA GENERAL: Si una frase contiene cualquier combinación de negación + verbo de acción,
 o cualquier expresión que indique si algo SE HIZO o NO SE HIZO,
 cópiala exactamente como está aunque tenga errores ortográficos.
+
+ANTI-COMPRESIÓN: La transcripción puede sonar repetitiva o informal — eso es intencional y refleja cómo habló el usuario. 
+Tu trabajo NO es mejorar el estilo ni hacer el texto más conciso.
+Una reducción mayor al 15% de palabras es señal de que estás alterando el texto — en ese caso, devuelve el original.
 
 PRIORIDAD MÁXIMA: Ante la duda, copia la frase original sin modificar.
 Es preferible conservar un error de transcripción que alterar el significado.
