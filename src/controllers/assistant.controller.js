@@ -3809,11 +3809,6 @@ export async function verificarCambiosDesdeAnfeta(req, res) {
     const analisisVigente = documentoUsuario?.analisisGuardado?.vigente !== false;
     const huboCambios = comparableActual !== comparableGuardado || !analisisVigente;
 
-    console.log("📋 actual:  ", comparableActual);
-    console.log("💾 guardado:", comparableGuardado);
-    console.log("✅ vigente: ", analisisVigente);
-    console.log(huboCambios ? "Hubo cambios en Anfeta" : "No hubo cambios en Anfeta");
-
     if (huboCambios) {
       await ActividadesSchema.findOneAndUpdate(
         { odooUserId: userId },

@@ -30,7 +30,6 @@ function getModel() {
   if (!model) {
     vosk.setLogLevel(-1);
     model = new vosk.Model(MODEL_PATH);
-    console.log("[Vosk] Modelo listo para transcripción en tiempo real.");
   }
   return model;
 }
