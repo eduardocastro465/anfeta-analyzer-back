@@ -16,7 +16,7 @@ import { detectarCambiosEnRevisiones } from "../Helpers/actividades.helpers.js";
 import { generarHashActividades } from "../Helpers/generarHashActividades.helper.js";
 import { detectarYSincronizarCambios, detectarCambiosSinSincronizar } from "../Helpers/detectarCambiosActividades.helper.js";
 import { corregirTranscripcionTarde, corregirTranscripcionMañana, corregirTranscripcionProyecto, corregirTranscripcionGeneral } from "../Helpers/correctorDelTranscriptorAi.js";
-import { sincronizarExplicacionesCompaneros } from "../Helpers/sincronizarexplicacionescompaneros.helper.js";
+import { sincronizarExplicacionesCompaneros } from "../Helpers/sincronizarExplicacionesCompaneros.helper.js";
 import console from 'console';
 
 const HORARIO_INICIO = 9.0;
