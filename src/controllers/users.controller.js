@@ -137,6 +137,8 @@ export async function obtenerKeysUsuario(req, res) {
 
     if (!user) return res.status(404).json({ success: false, message: "Usuario no encontrado" });
 
+    console.log("Las keys son: ", user.keys);
+
     return res.json({
       success: true,
       keys: {

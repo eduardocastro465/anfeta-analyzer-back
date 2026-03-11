@@ -2,6 +2,7 @@ import axios from 'axios';
 import crypto from 'crypto';
 import { getAllUsers } from './users.controller.js';
 import jwt from 'jsonwebtoken';
+import { axiosAnfeta } from "../services/axios.js";
 import { isGeminiQuotaError } from '../libs/geminiRetry.js'
 import { sanitizeObject } from '../libs/sanitize.js'
 import { smartAICall, parseRespuestaConversacional, parseAIJSONSafe } from '../libs/aiService.js';
@@ -274,11 +275,22 @@ async function obtenerActividadesDelDia(email) {
  * @param {string} email - Email del colaborador
  * @returns {Promise<Object>} Objeto con colaboradores y sus revisiones
  */
-async function obtenerRevisionesPorFecha(date, email) {
+async function obtenerRevisionesPorFecha(email) {
+
+  const nowMX = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Mexico_City' }));
+
+  const end = `${nowMX.getFullYear()}-${String(nowMX.getMonth() + 1).padStart(2, '0')}-${String(nowMX.getDate()).padStart(2, '0')}`;
+
+  const unaSemanAtras = new Date(nowMX);
+  unaSemanAtras.setDate(unaSemanAtras.getDate() - 30);
+  const start = `${unaSemanAtras.getFullYear()}-${String(unaSemanAtras.getMonth() + 1).padStart(2, '0')}-${String(unaSemanAtras.getDate()).padStart(2, '0')}`;
+
+  console.log(`📅 Revisiones rango: ${start} → ${end}`);
+
   try {
-    const response = await axios.get(
-      `${API_URL_ANFETA}/reportes/revisiones-por-fecha`,
-      { params: { date, assignee: email } }
+    const response = await axiosAnfeta.get(
+      `/reportes/revisiones-por-fecha`,
+      { params: { start, end, assignee: email } }
     );
     return response.data?.success ? response.data.data : { colaboradores: [] };
   } catch (error) {
@@ -365,7 +377,6 @@ export async function getActividadesConRevisiones(req, res) {
       consultarAlApi = false
     } = sanitizeObject(req.body);
 
-
     const { token } = req.cookies;
 
     if (!token) {
@@ -394,8 +405,13 @@ export async function getActividadesConRevisiones(req, res) {
     const documentoExistente = await ActividadesSchema.findOne({ odooUserId });
     const inicioDiaHoy = new Date();
     inicioDiaHoy.setHours(0, 0, 0, 0);
+
+    const fechaActividadesGuardadas = documentoExistente?.actividades?.[0]?.fecha;
+    const actividadesGuardadasSonDeHoy = fechaActividadesGuardadas === today;
+
     const esPrimeraConsultaDelDia = !documentoExistente?.ultimaSincronizacion
-      || documentoExistente.ultimaSincronizacion < inicioDiaHoy;
+      || documentoExistente.ultimaSincronizacion < inicioDiaHoy
+      || !actividadesGuardadasSonDeHoy;
 
 
     if (!esPrimeraConsultaDelDia && !consultarAlApi) {
@@ -443,13 +459,13 @@ export async function getActividadesConRevisiones(req, res) {
       return true;
     });
 
-
     /* ------------------------------------------------------------------
        PASO 4: OBTENER REVISIONES (PENDIENTES) POR FECHA
     ------------------------------------------------------------------ */
 
-    const todasRevisiones = await obtenerRevisionesPorFecha(today, email);
-
+    console.time('⏱ obtenerRevisiones');
+    const todasRevisiones = await obtenerRevisionesPorFecha(email);
+    console.timeEnd('⏱ obtenerRevisiones');
 
     /* ------------------------------------------------------------------
        PASO 5: PROCESAR CADA ACTIVIDAD FILTRADA
@@ -472,12 +488,15 @@ export async function getActividadesConRevisiones(req, res) {
     const actividadesFinales = actividadesFiltradas;
 
 
+    console.time('⏱ Promise.all actividades');
     // Procesar cada actividad filtrada de forma concurrente para mejorar velocidad
     await Promise.all(actividadesFiltradas.map(async (actividad) => {
       const actividadId = actividad.id;
 
+      console.time(`⏱ detalle ${actividad.id.substring(0, 8)}`);
       // 1. Obtener detalle completo de la actividad (para assignees y proyecto)
       const detalleActividad = await obtenerDetalleActividadPorId(actividadId);
+      console.timeEnd(`⏱ detalle ${actividad.id.substring(0, 8)}`);
 
       // 2. Procesar colaboradores (assignees) desde el detalle - ÚNICA FUENTE DE VERDAD
       const colaboradoresNombres = [];
@@ -553,6 +572,13 @@ export async function getActividadesConRevisiones(req, res) {
           // Si la fecha del pendiente es mayor a hoy, lo excluimos
           if (fechaPendiente && fechaPendiente > hoyMexico) return;
 
+          if (p.terminada && p.fechaFinTerminada) {
+            const fechaFin = new Date(p.fechaFinTerminada).toLocaleDateString('sv-SE', {
+              timeZone: 'America/Mexico_City'
+            });
+            if (fechaFin < hoyMexico) return;
+          }
+
           const pendienteInfo = {
             id: p.id,
             nombre: p.nombre,
@@ -620,6 +646,8 @@ export async function getActividadesConRevisiones(req, res) {
 
       revisionesPorActividad[actividadId] = nuevaEntrada;
     }));
+    console.timeEnd('⏱ Promise.all actividades');
+
 
     const cambiosDetectados = await detectarCambiosEnRevisiones(
       odooUserId,
@@ -645,12 +673,11 @@ export async function getActividadesConRevisiones(req, res) {
     const documentoUsuario = await ActividadesSchema.findOne({ odooUserId: odooUserId });
 
     const meta0 = revisionesPorActividad[actividadesFinales[0]?.id];
-    console.log("🔍 estructura revision[0]:", JSON.stringify(meta0, null, 2).slice(0, 300));
-    console.log("🔑 hashActual guardando:", hashActual);
 
     let aiResult;
     let promptGenerado = "";
     let proyectoPrincipal = "Sin proyecto especifico";
+    let nombreConversacionIA = "Nueva conversacion";
 
     // Calcular métricas iniciales para el prompt
     let totalTareasConTiempo = 0;
@@ -771,9 +798,40 @@ prioriza 1 o 2
 Sin pendientes urgentes."
 `.trim();
 
-      aiResult = await smartAICall(promptGenerado);
-    }
 
+      const promptNombreConversacion = `
+Genera un TITULO MUY CORTO para una conversacion.
+
+ACTIVIDADES:
+${actividadesFinales.slice(0, 5).map(a => `- ${a.titulo.split(',')[0] || a.titulo.substring(0, 30)}`).join('\n')}
+
+CONTEXTO:
+- Proyecto principal: "${proyectoPrincipal}"
+- Total actividades: ${actividadesFinales.length}
+- Tareas totales: ${totalTareasConTiempo + totalTareasSinTiempo}
+- Colaboradores: ${colaboradoresTotales.length > 0 ? colaboradoresTotales.slice(0, 3).join(', ') : 'Solo tu'}
+
+REGLAS OBLIGATORIAS:
+- MAXIMO 3 PALABRAS
+- Solo letras y espacios
+- Sin signos de puntuacion
+- Idioma espanol
+
+RESPONDE SOLO EL TITULO
+`.trim();
+
+      console.time('⏱ AI calls');
+      const [aiResultTemp, aiNombreResult] = await Promise.all([
+        smartAICall(promptGenerado),
+        smartAICall(promptNombreConversacion)
+      ]);
+      console.timeEnd('⏱ AI calls');
+      aiResult = aiResultTemp;
+
+      if (aiNombreResult?.text) {
+        nombreConversacionIA = aiNombreResult.text.trim().slice(0, 60);
+      }
+    }
     totalTareasConTiempo = 0;
     totalTareasSinTiempo = 0;
     tareasAltaPrioridad = 0;
@@ -884,41 +942,6 @@ Sin pendientes urgentes."
       }))
     );
 
-    const promptNombreConversacion = `
-Genera un TITULO MUY CORTO para una conversacion.
-
-ACTIVIDADES:
-${actividadesFinales.slice(0, 5).map(a => `- ${a.titulo.split(',')[0] || a.titulo.substring(0, 30)}`).join('\n')}
-
-CONTEXTO:
-- Proyecto principal: "${proyectoPrincipal}"
-- Total actividades: ${actividadesFinales.length}
-- Tareas totales: ${totalTareasConTiempo + totalTareasSinTiempo}
-- Colaboradores: ${colaboradoresTotales.length > 0 ? colaboradoresTotales.slice(0, 3).join(', ') : 'Solo tu'}
-
-REGLAS OBLIGATORIAS:
-- MAXIMO 3 PALABRAS
-- Solo letras y espacios
-- Sin signos de puntuacion
-- Idioma espanol
-
-RESPONDE SOLO EL TITULO
-`.trim();
-
-    let nombreConversacionIA = "Nueva conversacion";
-    try {
-      const aiNombre = await smartAICall(promptNombreConversacion);
-      if (aiNombre?.text) {
-        nombreConversacionIA = aiNombre.text.trim().slice(0, 60);
-      }
-    } catch (e) {
-      console.warn("No se pudo generar nombre de conversacion con IA");
-    }
-
-    const actividadesExistentes = await ActividadesSchema.findOne({
-      odooUserId: odooUserId
-    });
-
     const actividadesParaGuardar = actividadesFinales.map(actividad => {
       const revisiones = revisionesPorActividad[actividad.id] || {
         pendientesConTiempo: [],
@@ -930,7 +953,7 @@ RESPONDE SOLO EL TITULO
         ...(revisiones?.pendientesSinTiempo || [])
       ];
 
-      const actividadExistente = actividadesExistentes?.actividades?.find(
+      const actividadExistente = actividadesGuardadas?.actividades?.find(
         a => a.actividadId === actividad.id
       );
 
@@ -974,14 +997,67 @@ RESPONDE SOLO EL TITULO
       };
     });
 
+    // REEMPLAZAR el findOneAndUpdate de ActividadesSchema por esto:
+
+    for (const actividadNueva of actividadesParaGuardar) {
+      const actividadExistenteEnDB = actividadesGuardadas?.actividades?.find(
+        a => a.actividadId === actividadNueva.actividadId
+      );
+
+      if (!actividadExistenteEnDB) {
+        // Nueva actividad — insertar
+        await ActividadesSchema.findOneAndUpdate(
+          { odooUserId },
+          { $push: { actividades: actividadNueva } },
+          { upsert: true }
+        );
+      } else {
+        // Actividad existente — solo actualizar campos que no son del usuario
+        const pendientesActualizados = actividadNueva.pendientes.map(pendienteNuevo => {
+          const pendienteExistente = actividadExistenteEnDB.pendientes?.find(
+            p => p.pendienteId === pendienteNuevo.pendienteId
+          );
+
+          if (!pendienteExistente) return pendienteNuevo; // nuevo pendiente
+
+          // Preservar datos del usuario, actualizar solo datos de Anfeta
+          return {
+            ...pendienteNuevo,
+            descripcion: pendienteExistente.descripcion,
+            queHizo: pendienteExistente.queHizo,
+            resumen: pendienteExistente.resumen,
+            revisadoPorVoz: pendienteExistente.revisadoPorVoz,
+            historialExplicaciones: pendienteExistente.historialExplicaciones,
+            explicacionVoz: pendienteExistente.explicacionVoz,
+            actualizadoPor: pendienteExistente.actualizadoPor,
+            fechaRevisionVoz: pendienteExistente.fechaRevisionVoz,
+          };
+        });
+
+        await ActividadesSchema.findOneAndUpdate(
+          { odooUserId, "actividades.actividadId": actividadNueva.actividadId },
+          {
+            $set: {
+              "actividades.$.titulo": actividadNueva.titulo,
+              "actividades.$.horaInicio": actividadNueva.horaInicio,
+              "actividades.$.horaFin": actividadNueva.horaFin,
+              "actividades.$.status": actividadNueva.status,
+              "actividades.$.fecha": actividadNueva.fecha,
+              "actividades.$.pendientes": pendientesActualizados,
+              "actividades.$.ultimaActualizacion": new Date(),
+            }
+          }
+        );
+      }
+    }
+
+    // Actualizar campos globales por separado
     await ActividadesSchema.findOneAndUpdate(
-      { odooUserId: odooUserId },
+      { odooUserId },
       {
         $set: {
-          odooUserId: odooUserId,
-          emailUsuario: email,
-          actividades: actividadesParaGuardar,
           ultimaSincronizacion: new Date(),
+          emailUsuario: email,
           analisisGuardado: {
             prompt: promptGenerado,
             respuesta: aiResult.text,
@@ -992,9 +1068,8 @@ RESPONDE SOLO EL TITULO
           }
         }
       },
-      { upsert: true, new: true }
+      { upsert: true }
     );
-
     await sincronizarExplicacionesCompaneros(
       odooUserId,
       actividadesParaGuardar.map(a => a.actividadId)
@@ -3763,7 +3838,7 @@ export async function verificarCambiosDesdeAnfeta(req, res) {
     // Fetch actividades Y revisiones
     const [actividadesRaw, todasRevisiones] = await Promise.all([
       obtenerActividadesDelDia(email),
-      obtenerRevisionesPorFecha(today, email)
+      obtenerRevisionesPorFecha(email)
     ]);
 
     const actividadesFiltradas = (actividadesRaw || []).filter(esActividadValida);
@@ -3776,18 +3851,18 @@ export async function verificarCambiosDesdeAnfeta(req, res) {
     const idsValidos = new Set(actividadesFiltradas.map(a => a.id));
     const pendientesPorActividad = {};
 
-  (todasRevisiones?.colaboradores ?? []).forEach(colaborador => {
-  (colaborador.items?.actividades ?? []).forEach(actividadRev => {
-    if (!idsValidos.has(actividadRev.id)) return;
+    (todasRevisiones?.colaboradores ?? []).forEach(colaborador => {
+      (colaborador.items?.actividades ?? []).forEach(actividadRev => {
+        if (!idsValidos.has(actividadRev.id)) return;
 
-    const idsPendientes = (actividadRev.pendientes ?? []).map(p => p.id);
-    const idsTerminadas = (actividadRev.terminadas ?? []).map(p => p.id); // ← agregar esto
+        const idsPendientes = (actividadRev.pendientes ?? []).map(p => p.id);
+        const idsTerminadas = (actividadRev.terminadas ?? []).map(p => p.id); // ← agregar esto
 
-    pendientesPorActividad[actividadRev.id] = [...idsPendientes, ...idsTerminadas]
-      .sort()
-      .join(',');
-  });
-});
+        pendientesPorActividad[actividadRev.id] = [...idsPendientes, ...idsTerminadas]
+          .sort()
+          .join(',');
+      });
+    });
 
     const comparableActual = actividadesFiltradas
       .sort((a, b) => a.id.localeCompare(b.id))
@@ -3806,19 +3881,29 @@ export async function verificarCambiosDesdeAnfeta(req, res) {
       })
       .join('|');
 
+    const huboCambiosEnAnfeta = comparableActual !== comparableGuardado;
     const analisisVigente = documentoUsuario?.analisisGuardado?.vigente !== false;
-    const huboCambios = comparableActual !== comparableGuardado || !analisisVigente;
 
-    if (huboCambios) {
+    if (huboCambiosEnAnfeta) {
       await ActividadesSchema.findOneAndUpdate(
         { odooUserId: userId },
         { $set: { 'analisisGuardado.vigente': false } }
       );
     }
+
+    // actividadesHoy.forEach(a => {
+    //   const todosIds = (a.pendientes || []).map(p => p.pendienteId).sort();
+    //   const idsAPI = (pendientesPorActividad[a.actividadId] || '').split(',').filter(Boolean);
+    // });
+
     return res.json({
       success: true,
-      cambios: huboCambios,
-      mensaje: huboCambios ? "Se detectaron cambios en Anfeta" : "No hay cambios"
+      cambios: huboCambiosEnAnfeta || !analisisVigente,
+      mensaje: huboCambiosEnAnfeta
+        ? "Se detectaron cambios en Anfeta"
+        : !analisisVigente
+          ? "Análisis desactualizado"
+          : "No hay cambios"
     });
 
   } catch (error) {
@@ -3943,6 +4028,13 @@ export async function getActividadesDesdeDB(req, res) {
           : null;
 
         if (fechaPendiente && fechaPendiente > hoyMexico) return;
+
+        if (p.terminada && p.fechaFinTerminada) {
+          const fechaFin = new Date(p.fechaFinTerminada).toLocaleDateString('sv-SE', {
+            timeZone: 'America/Mexico_City'
+          });
+          if (fechaFin < hoyMexico) return;
+        }
 
         const diasPendiente = p.fechaCreacion
           ? Math.floor((new Date() - new Date(p.fechaCreacion)) / (1000 * 60 * 60 * 24))
