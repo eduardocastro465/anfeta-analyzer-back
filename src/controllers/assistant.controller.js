@@ -883,27 +883,41 @@ RESPONDE SOLO EL TITULO
             actividadTitulo: actividad.titulo,
             actividadHorario: `${actividad.horaInicio} - ${actividad.horaFin}`,
             colaboradores: revisiones.actividad?.colaboradores || [],
-            tareasConTiempo: (revisiones.pendientesConTiempo || []).map(t => {
-              const pendienteGuardado = actividadGuardada?.pendientes?.find(
-                p => p.pendienteId === t.id
-              );
-              return {
-                id: t.id,
-                nombre: t.nombre,
-                terminada: t.terminada,
-                confirmada: t.confirmada,
-                reportada: t.reportada || false,
-                duracionMin: t.duracionMin || 0,
-                descripcion: pendienteGuardado?.descripcion || "",
-                queHizo: pendienteGuardado?.queHizo || "",
-                resumen: pendienteGuardado?.resumen || pendienteGuardado?.explicacionVoz?.resumen || null,
-                fechaCreacion: t.fechaCreacion,
-                fechaFinTerminada: t.fechaFinTerminada || null,
-                diasPendiente: t.diasPendiente || 0,
-                prioridad: t.prioridad || "BAJA",
-                explicacionVoz: pendienteGuardado?.explicacionVoz || null,
-              };
-            }),
+            tareasConTiempo: (revisiones.pendientesConTiempo || [])
+              .filter(t => {
+                const pendienteGuardado = actividadGuardada?.pendientes?.find(
+                  p => p.pendienteId === t.id
+                );
+                const fechaFin = pendienteGuardado?.fechaFinTerminada || t.fechaFinTerminada;
+                if (t.terminada && fechaFin) {
+                  const fechaFinStr = new Date(fechaFin).toLocaleDateString('sv-SE', {
+                    timeZone: 'America/Mexico_City'
+                  });
+                  return fechaFinStr >= hoyMexico;
+                }
+                return true;
+              })
+              .map(t => {
+                const pendienteGuardado = actividadGuardada?.pendientes?.find(
+                  p => p.pendienteId === t.id
+                );
+                return {
+                  id: t.id,
+                  nombre: t.nombre,
+                  terminada: t.terminada,
+                  confirmada: t.confirmada,
+                  reportada: t.reportada || false,
+                  duracionMin: t.duracionMin || 0,
+                  descripcion: pendienteGuardado?.descripcion || "",
+                  queHizo: pendienteGuardado?.queHizo || "",
+                  resumen: pendienteGuardado?.resumen || pendienteGuardado?.explicacionVoz?.resumen || null,
+                  fechaCreacion: t.fechaCreacion,
+                  fechaFinTerminada: t.fechaFinTerminada || null,
+                  diasPendiente: t.diasPendiente || 0,
+                  prioridad: t.prioridad || "BAJA",
+                  explicacionVoz: pendienteGuardado?.explicacionVoz || null,
+                };
+              }),
             totalTareasConTiempo: revisiones.pendientesConTiempo?.length || 0,
             tareasAltaPrioridad: revisiones.pendientesConTiempo?.filter(t => t.prioridad === "ALTA").length || 0,
             tiempoTotal,
@@ -988,7 +1002,7 @@ RESPONDE SOLO EL TITULO
               confirmada: t.confirmada,
               duracionMin: t.duracionMin,
               fechaCreacion: t.fechaCreacion,
-              fechaFinTerminada: t.fechaFinTerminada,
+              fechaFinTerminada: t.fechaFinTerminada || pendienteExistente?.fechaFinTerminada || null,
               colaboradores: t.colaboradores || []
             };
           }),
