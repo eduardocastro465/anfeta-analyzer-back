@@ -1782,46 +1782,94 @@ export async function validarYGuardarReporteMañana(req, res) {
       actividadTitulo
     );
 
-    console.log("🎙️ Transcripción lista:", {
-      original: explicacion,
-      corregida: explicacionCorregida,
-    });
 
     // ─── 1. VALIDAR CON IA ────────────────────────────────────────────────────
     const promptValidacion = `
-Eres un sistema de validación estricto.
+Eres un validador estricto de reportes de trabajo en audio transcrito a texto.
 
-Tu tarea es determinar si una explicación corresponde de forma directa, específica y clara al pendiente indicado.
+CONTEXTO:
+- ACTIVIDAD: "${actividadTitulo}"
+- PENDIENTE: "${nombrePendiente}"
+- EXPLICACIÓN: "${explicacionCorregida}"
+- TIEMPO: ${duracionMin || duration || "No especificado"}
 
-CONTEXTO: El usuario está explicando qué hará durante el pendiente. ACTIVIDAD: "${actividadTitulo}" 
-PENDIENTE: "${nombrePendiente}" 
-EXPLICACIÓN: "${explicacionCorregida}" 
-TIEMPO: ${duracionMin || duration || "No especificado"}
+PASO 1 — FILTRO DE CONTENIDO MÍNIMO:
 
-Criterios obligatorios:
+Rechaza INMEDIATAMENTE si la explicación:
+- Usa referencias vacías: "eso", "lo de siempre", "ya sabes", "lo que te dije"
+- Es una pregunta sin respuesta o frase incompleta
+- Tiene menos de 6 palabras con contenido real (ignora artículos, preposiciones, muletillas)
+- Es solo una confirmación: "sí", "ok", "listo", "correcto", "claro"
+- Habla de una tarea COMPLETAMENTE diferente al pendiente, sin ningún concepto en común
 
-La explicación viene de voz a texto, por lo que puede contener errores de transcripción, palabras mal reconocidas o jerga técnica del equipo.
+PASO 2 — EVALUACIÓN DE RELEVANCIA:
 
-Evalúa la INTENCIÓN y el CONTEXTO, no la literalidad exacta de las palabras.
+Si pasó el filtro anterior, evalúa si la explicación se relaciona con el pendiente.
+Compara por SEMÁNTICA, no por palabras exactas.
 
-Acepta cuando:
-- Las palabras suenan similar al pendiente aunque estén mal transcritas ("pack" = "back", "VAC" = "back", "espartino" = "vespertino").
-- Se describe una acción relacionada con el área del pendiente aunque use términos distintos.
-- La explicación es informal o coloquial pero el contexto es claro.
+Ejemplos de coincidencias válidas:
+- Pendiente: "Revisión del modelo de validación IA (back)"
+  Explicación: "revisar el modelo de validación en pruebas" ✅ → misma tarea
+- Pendiente: "Deploy producción"
+  Explicación: "subir los cambios al servidor" ✅ → misma acción
+- Pendiente: "Reunión con cliente X"
+  Explicación: "hablar con el equipo de X para alinear el proyecto" ✅ → mismo contexto
 
-Solo rechaza si:
-- La explicación claramente habla de algo completamente diferente al pendiente.
-- Son menos de 5 palabras sin contenido útil.
-- Es solo una confirmación vacía: "sí", "ok", "listo", "gracias".
+ACEPTA cuando:
+- Las palabras clave del pendiente aparecen en la explicación aunque sea parcialmente
+- Describe una acción que claramente forma parte del trabajo del pendiente
+- Usa sinónimos, abreviaciones o jerga técnica del área ("back" = backend, "deploy" = subir)
+- Tiene errores de transcripción pero la intención es recuperable
 
-Ante la duda, marca como válida.
+RECHAZA SOLO cuando:
+- La explicación habla de una tarea COMPLETAMENTE diferente y sin relación alguna
+- No hay ninguna palabra clave ni concepto en común con el pendiente
 
-Responde exclusivamente en formato JSON:
+PATRÓN DE RECHAZO — "verbo genérico + referencia vaga":
+Rechaza cuando la explicación combine un verbo de acción con un objeto completamente inespecífico.
 
+Ejemplos de este patrón que DEBES rechazar:
+→ "estoy comprobando que todo funcione" (¿qué exactamente?)
+→ "voy a revisar que esté bien" (¿qué?)
+→ "viendo lo del sistema" (¿qué parte?)
+→ "trabajando en lo que quedó" (¿qué quedó?)
+→ "checando que no haya errores" (¿dónde?)
+
+La diferencia con una explicación válida:
+✅ "comprobando que el endpoint de validación devuelva 200 en casos edge"
+✅ "revisando que el modelo de IA no rechace transcripciones con errores fonéticos"
+❌ "comprobando que todo funcione correctamente"
+
+
+PASO 3 — REGLA DE ORO:
+
+Pregúntate: "¿Un supervisor podría entender QUÉ se hizo o hará con esta explicación?"
+
+- Si NO puede entenderlo → INVÁLIDA
+- Si SÍ puede entenderlo → VÁLIDA
+
+Ante la duda: INVÁLIDA.
+
+
+RESPUESTA:
+
+Responde EXCLUSIVAMENTE en JSON:
 {
-"esValida": boolean,
-"razon": "explicación breve y técnica de la decisión"
-}
+  "esValida": boolean,
+  "razon": string — 1 oración corta y directa. Solo di qué falta, nada más.
+  Formato exacto: "Especifica [qué falta], por ejemplo: [ejemplo concreto]."
+  PROHIBIDO mencionar: supervisor, patrón, filtro, criterio.
+  PROHIBIDO copiar texto del usuario.
+
+  Formato exacto: "Especifica [qué falta], por ejemplo: [ejemplo concreto]."
+
+  Ejemplos:
+  ✅ "Especifica qué parte vas a revisar, por ejemplo: el endpoint, el formulario, el módulo de login."
+  ✅ "Especifica qué vas a probar, por ejemplo: el flujo de validación, la respuesta del servidor, el componente."
+
+  PROHIBIDO mencionar: supervisor, patrón, filtro, criterio, técnico, validación de IA.
+  PROHIBIDO copiar texto del usuario.
+  PROHIBIDO explicar por qué falló."
 `;
 
     const aiValidacion = await smartAICall(promptValidacion);
@@ -2053,7 +2101,6 @@ Responde SOLO con el texto del resumen, sin JSON ni marcadores.
       "actividades.actividadId": actividadId
     }).select("emailUsuario").lean();
 
-    console.log("👥 Usuarios afectados encontrados:", usuariosAfectados);
 
     usuariosAfectados.forEach(usuario => {
       if (usuario.emailUsuario) {
@@ -2063,7 +2110,6 @@ Responde SOLO con el texto del resumen, sin JSON ni marcadores.
           pendienteId: idPendiente,
           por: emailUsuario
         });
-        console.log(`📡 Notificado a: ${usuario.emailUsuario}`);
       }
     });
 
@@ -2601,7 +2647,6 @@ export async function consultarIA(req, res) {
     const decoded = jwt.verify(token, TOKEN_SECRET);
     const { id: userId } = decoded;
 
-    console.log("cuerpo de la req", req.body)
 
     if (!mensaje || mensaje.trim().length === 0) {
       return res.status(400).json({
@@ -2750,8 +2795,6 @@ export async function consultarIAProyecto(req, res) {
     const decoded = jwt.verify(token, TOKEN_SECRET);
     const { id: userId, email } = decoded;
 
-    console.log("cuerpo de la req", req.body)
-
     if (!mensaje || mensaje.trim().length === 0) {
       return res.status(400).json({
         success: false,
@@ -2856,7 +2899,6 @@ export async function consultarIAProyecto(req, res) {
 
     const aiResult = await smartAICall(prompt);
 
-    console.log("aiResult", aiResult)
     // Limpiar respuesta
     let textoLimpio = aiResult.text.trim();
 

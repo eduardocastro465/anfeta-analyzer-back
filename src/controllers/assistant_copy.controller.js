@@ -2030,7 +2030,6 @@ Responde SOLO con el texto del resumen, sin JSON ni marcadores.
       "actividades.actividadId": actividadId
     }).select("emailUsuario").lean();
 
-    console.log("👥 Usuarios afectados encontrados:", usuariosAfectados);
 
     usuariosAfectados.forEach(usuario => {
       if (usuario.emailUsuario) {

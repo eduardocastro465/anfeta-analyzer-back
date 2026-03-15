@@ -4,57 +4,67 @@ import { smartAICall } from "../libs/aiService.js";
 export async function corregirTranscripcionMañana(texto, nombreTarea = "", descripcionTarea = "") {
   if (!texto || texto.trim().length < 10) return texto;
 
-  const prompt = `Eres un corrector literal de transcripciones de voz a texto en español mexicano en contexto laboral de software.
+  const prompt = `Corrige errores de voz a texto en español. Devuelve SOLO el texto corregido, sin notas ni comentarios.
 
-Tu objetivo es: Corregir errores de reconocimiento de voz sin alterar el significado original.
+Tarea de referencia: "${nombreTarea}"
 
-━━━ CONTEXTO DE LA TAREA (SOLO REFERENCIA LÉXICA) ━━━
-Nombre: "${nombreTarea}"
-Descripción: "${descripcionTarea || 'Sin descripción'}"
+Texto: "${texto}"
 
-El contexto SOLO puede usarse para corregir términos técnicos mal reconocidos o desambiguar palabras fonéticamente similares.
-NO puede usarse para agregar acciones, completar tareas implícitas, inventar resultados ni anticipar avances futuros.
+Reglas:
+- Solo corrige palabras mal reconocidas fonéticamente
+- Elimina muletillas de inicio: "hola", "bueno", "este", "pues"
+- NUNCA cambies tiempos verbales ni agregues palabras nuevas
+- Si una palabra es rara pero entendible, cópiala igual
+- Si no sabes cómo corregir algo, cópialo igual
 
-━━━ TEXTO A CORREGIR (PLAN DE HOY — VOZ A TEXTO) ━━━
-"${texto}"
+Errores fonéticos frecuentes en este contexto:
+"talla" → "tarea", "ganamos" → "vamos a", "la guía" → "la IA", "trañando" → "tratando", "planos" → "planes"
 
-━━━ REGLAS ESTRICTAS ━━━
-1. El texto es un plan de lo que el usuario VA A HACER hoy — mantén el tiempo futuro o presente intencional
-2. No agregues pasos, subtareas ni acciones que el usuario no mencionó
-3. No cambies expresiones de intención ("voy a", "planeo", "tengo que") por afirmaciones de hecho
-4. Solo corrige: errores fonéticos obvios, muletillas y repeticiones
-5. Si algo es ambiguo, consérvalo ambiguo
-6. Máximo 3 oraciones
-7. Si la corrección cambia el significado, devuelve el texto original
-8. NUNCA completes palabras parciales ni inventes términos que no están en el original
-9. Si una palabra es incomprensible, cópiala tal cual
-
-CRÍTICO: Responde ÚNICAMENTE con el texto corregido.
-- Sin comillas al inicio o al final
-- Sin paréntesis explicativos
-- Sin notas ni comentarios
-- Sin markdown
-
-CRÍTICO: NUNCA alteres expresiones de incertidumbre, duda o limitación en el plan.
-Ejemplos que NO debes cambiar:
-→ "no sé si voy a poder terminarlo" → NO cambiar
-→ "depende de si llega la respuesta" → NO cambiar
-→ "tal vez lo reviso si me da tiempo" → NO cambiar
-→ "voy a intentar avanzar" → NO cambiar
-
-PRIORIDAD MÁXIMA: Ante la duda, copia la frase original sin modificar.`;
+Responde ÚNICAMENTE con el texto corregido.`;
 
   try {
     const result = await smartAICall(prompt);
-    let corregido = result.text
-      .trim()
-      .replace(/^["']|["']$/g, "")
-      .split("\n")[0]
-      .trim();
 
+    let corregido = result.text.trim().replace(/^["']|["']$/g, "").trim();
+
+    // Tomar línea más larga si Groq agregó notas
+    const lineas = corregido.split("\n").map(l => l.trim()).filter(Boolean);
+    if (lineas.length > 1) {
+      corregido = lineas.reduce((a, b) => a.length > b.length ? a : b);
+    }
+
+    // Guardianes contra alucinación
     if (!corregido) return texto;
-    if (corregido.length < texto.length * 0.2) return texto;
-    if (corregido.length > texto.length * 1.5) return texto;
+    const palabrasOriginal = texto.trim().split(/\s+/).length;
+    const palabrasCorregido = corregido.trim().split(/\s+/).length;
+
+    if (palabrasCorregido < palabrasOriginal * 0.6) {
+      console.warn(`⚠️ Reducción excesiva de palabras (${palabrasOriginal} → ${palabrasCorregido}), usando original`);
+      return texto;
+    }
+
+    if (corregido.length > texto.length * 1.4) return texto;
+
+    const tokenizar = str => new Set(
+      str.toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .split(/\s+/)
+        .filter(p => p.length > 4)
+    );
+
+    const tokensOriginal = tokenizar(texto);
+    let inventadas = 0, total = 0;
+
+    for (const palabra of tokenizar(corregido)) {
+      total++;
+      if (!tokensOriginal.has(palabra)) inventadas++;
+    }
+
+    if (total > 0 && inventadas / total > 0.45) {
+      console.warn(`⚠️ Alucinación detectada (${Math.round(inventadas / total * 100)}% palabras nuevas), usando original`);
+      return texto;
+    }
 
     console.log("🔧 Transcripción mañana corregida:", {
       original: texto,
@@ -63,6 +73,7 @@ PRIORIDAD MÁXIMA: Ante la duda, copia la frase original sin modificar.`;
     });
 
     return corregido;
+
   } catch (err) {
     console.warn("⚠️ Error en corregirTranscripcionMañana, usando original:", err.message);
     return texto;
